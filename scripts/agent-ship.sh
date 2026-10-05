@@ -8,10 +8,8 @@
 #              ~/Загрузки или ~/Downloads
 #   --ship     ssh-цель узла, как у scripts/release.sh в claude-test
 #   --dir      каталог стека на узле (по умолчанию /srv/kkt); агент ляжет в
-#              <dir>/static/agent, страница разделов dl.kktsite.ru — в <dir>/static/dl
-#   --dl-index страница разделов dl.kktsite.ru (по умолчанию — из соседнего
-#              клона claude-test: ../claude-test/docs/deploy/dl/index.html;
-#              нет его — страница разделов не обновляется)
+#              <dir>/static/agent. Корень dl.kktsite.ru (страница разделов) —
+#              не забота агента: она в claude-test, docs/deploy/dl/
 #   --no-prune не убирать с узла прежние выпуски
 #   --dry-run  распаковать, подписать и проверить здесь, а команды для узла
 #              только напечатать
@@ -42,11 +40,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
 GH_REPO="${AGENT_GH_REPO:-avb56/kktsite-agent}"
 SHIP=""
 REMOTE_DIR="/srv/kkt"
-DL_INDEX="$ROOT/../claude-test/docs/deploy/dl/index.html"
 ARTIFACT=""
 PRUNE=1
 DRY=0
@@ -55,10 +51,9 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --ship) SHIP="${2:?--ship ЦЕЛЬ}"; shift 2 ;;
     --dir) REMOTE_DIR="${2:?--dir ПУТЬ}"; shift 2 ;;
-    --dl-index) DL_INDEX="${2:?--dl-index ФАЙЛ}"; shift 2 ;;
     --no-prune) PRUNE=0; shift ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     -*) echo "Неизвестный параметр: $1" >&2; exit 1 ;;
     *) ARTIFACT="$1"; shift ;;
   esac
@@ -91,20 +86,16 @@ VERSION="$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.ar
 KEEP="$(node -e "const o = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
   for (const e of [...Object.values(o.files || {}), ...Object.values(o.installers || {})]) console.log(e.file.replace(/^files\//, ''));" "$WORK/latest.json" | sort -u)"
 cp "$HERE/../packaging/site/index.html" "$WORK/agent-index.html"
-HAVE_DL_INDEX=0
-if [ -f "$DL_INDEX" ]; then cp "$DL_INDEX" "$WORK/dl-index.html"; HAVE_DL_INDEX=1
-else echo "страница разделов не найдена ($DL_INDEX) — dl.kktsite.ru/ не обновляется"; fi
 
 AGENT="$REMOTE_DIR/static/agent"
-DL="$REMOTE_DIR/static/dl"
 
 if [ "$DRY" = 1 ]; then
   echo
   echo "--dry-run: на узел ${SHIP:-<ЦЕЛЬ>} ушло бы:"
-  echo "  mkdir -p $AGENT/files $DL"
+  echo "  mkdir -p $AGENT/files"
   echo "  files/ → $AGENT/files/ (только новых, существующие не трогаются):"
   ls -la "$WORK/files" | tail -n +2 | sed 's/^/    /'
-  echo "  index.html → $AGENT/index.html$([ "$HAVE_DL_INDEX" = 1 ] && echo ", $DL/index.html")"
+  echo "  index.html → $AGENT/index.html"
   echo "  latest.json.sig, latest.json → $AGENT/ (через .new и mv)"
   if [ "$PRUNE" = 1 ]; then
     echo "  уборка $AGENT/files: остаются только"
@@ -136,7 +127,7 @@ fDiffering() {
   join -j 2 <(sort -k2 <<<"$1") <(sort -k2 <<<"$2") | awk '$2 != $3 {print $1}'
 }
 
-P "mkdir -p '$AGENT/files' '$DL'"
+P "mkdir -p '$AGENT/files'"
 
 # Та же версия, другая сборка: архив на узле не перезапишется, а latest.json
 # подписан по новому — агенты отвергнут обновление по sha256. Остановиться
@@ -155,7 +146,6 @@ fi
 # всякого tar (busybox его не знает), а это — обычный sh.
 tar -C "$WORK/files" -cf - . | P "set -e; T='$AGENT/.incoming'; rm -rf \"\$T\"; mkdir -p \"\$T\"; tar -C \"\$T\" -xf -; for f in \"\$T\"/*; do [ -e \"\$f\" ] || continue; n=\$(basename \"\$f\"); [ -e '$AGENT/files/'\"\$n\" ] || mv \"\$f\" '$AGENT/files/'; done; rm -rf \"\$T\""
 scp -q "${SSH_OPTS[@]}" "$WORK/agent-index.html" "$SHIP:$AGENT/index.html"
-[ "$HAVE_DL_INDEX" = 1 ] && scp -q "${SSH_OPTS[@]}" "$WORK/dl-index.html" "$SHIP:$DL/index.html"
 scp -q "${SSH_OPTS[@]}" "$WORK/latest.json.sig" "$SHIP:$AGENT/latest.json.sig.new"
 scp -q "${SSH_OPTS[@]}" "$WORK/latest.json" "$SHIP:$AGENT/latest.json.new"
 P "cd '$AGENT' && mv latest.json.sig.new latest.json.sig && mv latest.json.new latest.json"
