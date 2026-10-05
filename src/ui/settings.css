@@ -1,0 +1,262 @@
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --text: #1c1e21;
+  --muted: #65686e;
+  --line: #d9dce1;
+  --accent: #1f6feb;
+  --accent-text: #ffffff;
+  --ok: #1a7f37;
+  --off: #8c9096;
+  --err: #c62828;
+  --err-bg: #fdecea;
+  --err-text: #ffffff;
+  --warn-bg: #fff4d6;
+  --warn: #7a5200;
+  --radius: 8px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --panel: #20232a;
+    --text: #e6e8eb;
+    --muted: #9ba1a9;
+    --line: #353a43;
+    --accent: #4c8dff;
+    --accent-text: #0b1220;
+    --ok: #3fb950;
+    --off: #6e757e;
+    --err: #ff7b72;
+    --err-bg: #3a1d1d;
+    --err-text: #0b1220;
+    --warn-bg: #3a2f12;
+    --warn: #f0c35a;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+/* hidden должен побеждать display у label, кнопок и т. п. */
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.top, main { max-width: 860px; margin: 0 auto; padding: 16px; }
+.top { padding-bottom: 0; }
+h1 { font-size: 22px; margin: 8px 0 2px; }
+h2 { font-size: 17px; margin: 0 0 10px; }
+p { margin: 6px 0; }
+code {
+  font: 13px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+.muted { color: var(--muted); }
+.error { color: var(--err); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.panel-head h2 { margin: 0; }
+
+.alert { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; }
+.alert.err { background: var(--err-bg); color: var(--err); }
+.alert.warn { background: var(--warn-bg); color: var(--warn); }
+
+/* Все кнопки — как «Добавить ККТ»: залитые акцентом; опасные — красным. */
+button, a.button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+  cursor: pointer;
+}
+a.button { text-decoration: none; }
+button:hover:not(:disabled), a.button:hover { filter: brightness(1.1); }
+dl.cert { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0; font-size: 14px; }
+dl.cert dt { color: var(--muted); }
+dl.cert dd { margin: 0; overflow-wrap: anywhere; }
+#https-on .actions, #update-controls .actions { margin-left: 0; }
+details ul { padding-left: 20px; }
+details li { margin: 6px 0; }
+button:disabled { opacity: .55; cursor: default; }
+button.danger, button.danger-text { background: var(--err); border-color: var(--err); color: var(--err-text); }
+
+.devices { list-style: none; margin: 0; padding: 0; }
+.device { border-top: 1px solid var(--line); padding: 12px 0; }
+.device:first-child { border-top: 0; }
+.device-head { display: flex; align-items: center; gap: 10px; }
+.device-title { min-width: 0; overflow-wrap: anywhere; }
+.dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+.dot.on { background: var(--ok); }
+.dot.fail { background: var(--err); }
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-text);
+  vertical-align: 1px;
+}
+.summary, .state, .device .error { margin-left: 20px; }
+.device .kassa-row { margin: 4px 0 0 20px; }
+.kassa-row code { font-size: 13px; }
+.check {
+  margin: 6px 0 0 20px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg);
+  border-radius: 4px;
+}
+.check dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+.check dt { color: var(--muted); }
+.check dd { margin: 0; overflow-wrap: anywhere; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 20px; }
+
+.copy-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.copy-row code { font-size: 14px; padding: 4px 8px; }
+
+.inline-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.inline-form input, #settings-form input[type="number"] { width: 12em; }
+#settings-form label { align-items: flex-start; }
+#settings-form .check-label { align-items: center; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+input, select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  min-width: 0;
+}
+input:disabled { color: var(--muted); background: var(--bg); }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+input:invalid.touched { border-color: var(--err); }
+small { font-size: 12px; }
+
+dialog {
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  padding: 20px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+details { margin: 14px 0 0; }
+summary { cursor: pointer; color: var(--muted); }
+.check-label { flex-direction: row; align-items: center; gap: 8px; margin-top: 14px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Уведомления — как в приложении кассы (Toolpad useNotifications: MUI Snackbar
+   сверху по центру, выезжает вниз, Alert variant="filled", крестик, 5 с, очередь со счётчиком). */
+.notify {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  z-index: 1400;
+  max-width: calc(100vw - 16px);
+  transform: translate(-50%, 0);
+  transition: transform 225ms cubic-bezier(0, 0, .2, 1);
+}
+.notify.leaving { transition-duration: 195ms; transition-timing-function: cubic-bezier(.4, 0, .6, 1); }
+.notify.away { transform: translate(-50%, calc(-100% - 24px)); }
+@media (max-width: 599px) { .notify { top: 8px; } .notify.away { transform: translate(-50%, calc(-100% - 8px)); } }
+.notify-alert {
+  --fill: #0288d1;
+  --fill-text: #fff;
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 16px;
+  border-radius: 4px;
+  background: var(--fill);
+  color: var(--fill-text);
+  font-size: 14px;
+  line-height: 1.43;
+  font-weight: 500;
+  letter-spacing: .01071em;
+}
+.notify-alert.success { --fill: #2e7d32; }
+.notify-alert.warning { --fill: #ed6c02; }
+.notify-alert.error { --fill: #d32f2f; }
+.notify-icon { display: flex; flex: none; margin-right: 12px; padding: 7px 0; opacity: .9; }
+.notify-icon svg, .notify-close svg { width: 22px; height: 22px; fill: currentColor; }
+.notify-close svg { width: 20px; height: 20px; }
+.notify-text { padding: 8px 0; min-width: 0; overflow-wrap: anywhere; }
+.notify-action { display: flex; align-items: flex-start; padding: 4px 0 0 16px; margin-left: auto; margin-right: -8px; }
+.notify-close {
+  display: flex;
+  padding: 5px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+}
+.notify-close:hover { background: rgba(0, 0, 0, .08); border: 0; filter: none; }
+.notify-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  transform: translate(50%, -50%);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: #1976d2;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: center;
+}
+@media (prefers-color-scheme: dark) {
+  /* В тёмной схеме MUI заливает цветом palette.*.dark. */
+  .notify-alert.success { --fill: #388e3c; }
+  .notify-alert.warning { --fill: #f57c00; --fill-text: rgba(0, 0, 0, .87); }
+  .notify-badge { background: #90caf9; color: rgba(0, 0, 0, .87); }
+}
+
+/* Вкладки */
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 4px 0 16px; }
+.tabs [role="tab"] {
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 14px;
+  margin-bottom: -1px;
+}
+.tabs [role="tab"]:hover { color: var(--text); border-color: transparent; filter: none; }
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--line);
+  border-bottom: 1px solid var(--panel);
+  font-weight: 600;
+}
+.tabs [role="tab"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tabs + .panel, [data-pane] { margin-top: 0; }
+
+/* Учётные записи сервера */
+.users { list-style: none; padding: 0; margin: 8px 0; }
+.users li { padding: 4px 0; display: flex; align-items: center; gap: 8px; }
+.alert button { margin-left: 8px; }

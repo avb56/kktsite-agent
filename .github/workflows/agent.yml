@@ -1,0 +1,84 @@
+# Локальный сервер кассы: тесты и автозапуск службой на трёх ОС.
+#
+# service install → агент отвечает → kill → служба поднимает его снова →
+# service uninstall → порт закрыт (scripts/ci-service-check.mjs).
+# Драйвера ДТО и ККТ на машинах CI нет: проверяется сервер и служба, не печать.
+#
+# Репозиторий публичный — минуты Actions не считаются, в том числе macOS.
+# Правки одной документации прогон не запускают.
+
+name: agent
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  service:
+    name: service (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Обёртка драйвера — нативный модуль, собирается здесь (node-gyp).
+      # До трёх попыток: node-gyp при скачивании заголовков Node изредка
+      # падает сам (29.09.2026 на Windows: undici «assert(!this.paused)»).
+      - name: npm ci
+        run: |
+          for n in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci не удался (попытка $n), повторяю"
+            sleep 10
+          done
+          exit 1
+
+      - run: npm test
+
+      - name: service install
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node src/main.js service install --port 16733
+          else
+            sudo "$(command -v node)" src/main.js service install --port 16733
+          fi
+
+      - name: service status
+        run: node src/main.js service status
+
+      - name: агент отвечает и перезапускается после kill
+        run: node scripts/ci-service-check.mjs 16733
+
+      - name: service uninstall
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node src/main.js service uninstall
+          else
+            sudo "$(command -v node)" src/main.js service uninstall
+          fi
+
+      - name: после uninstall агент не поднимается
+        run: node scripts/ci-service-check.mjs 16733 --stopped
+
+      - name: журнал агента
+        if: always()
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo journalctl -u kktsite-agent --no-pager -n 100 || true ;;
+            macOS) cat "$HOME/Library/Application Support/kktsite-agent/agent.log" || true ;;
+            # $PROGRAMDATA в Git Bash пуст (переменная — ProgramData): читаем через node.
+            Windows) node -e "const p = require('path').join(process.env.ProgramData, 'kktsite-agent'); for (const f of ['agent.log', 'run.cmd']) { try { console.log('== ' + f + '\n' + require('fs').readFileSync(require('path').join(p, f), 'utf8')); } catch (e) { console.log(e.message); } }" ;;
+          esac

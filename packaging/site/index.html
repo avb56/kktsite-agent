@@ -1,0 +1,249 @@
+<!doctype html>
+<!--
+  Страница загрузки локального агента кассы — dl.kktsite.ru/agent/ (в claude-test: docs/deploy/nginx-dl.conf).
+  Выкладывается scripts/agent-ship.sh рядом с latest.json и files/ (в files/ —
+  только текущий выпуск, все выпуски — GitHub Releases avb56/kktsite-agent); ссылки —
+  относительные (страница живёт в /agent/). Список
+  строится из latest.json в браузере: новый выпуск — новая страница без правок.
+  Без внешних ресурсов: CSP страницы разрешает только свой сайт.
+-->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сервер кассы — загрузка</title>
+  <style>
+    :root {
+      --bg: #f4f5f7; --panel: #fff; --text: #1c1e21; --muted: #65686e; --line: #d9dce1;
+      --accent: #1f6feb; --accent-text: #fff; --err: #c62828; --radius: 8px;
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #16181c; --panel: #20232a; --text: #e6e8eb; --muted: #9ba1a9; --line: #353a43;
+        --accent: #4c8dff; --accent-text: #0b1220; --err: #ff7b72;
+        color-scheme: dark;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 0 0 10px; }
+    p { margin: 6px 0; }
+    .muted { color: var(--muted); }
+    .error { color: var(--err); }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-top: 16px; }
+    .primary {
+      display: inline-block; margin: 10px 0 4px; padding: 10px 18px; border-radius: 6px;
+      background: var(--accent); color: var(--accent-text); text-decoration: none; font-weight: 600;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: normal; border-top: 0; }
+    a { color: var(--accent); }
+    code { font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+    .nav { margin: 0 0 8px; font-size: 14px; }
+    .sha { display: block; max-width: 22em; color: var(--muted); }
+    button.copy { font: inherit; font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); cursor: pointer; }
+    ol, ul { padding-left: 20px; margin: 6px 0; }
+    li { margin: 4px 0; }
+    @media (max-width: 600px) {
+      .col-sha { display: none; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="nav"><a href="/">← Все загрузки</a></p>
+  <h1>Сервер кассы</h1>
+  <p class="muted">Локальный сервер для кассы kktsite: печать на ККТ Атол через драйвер ДТО 10,
+    несколько ККТ на одном компьютере, общая касса в локальной сети.</p>
+
+  <section class="panel" id="main-panel">
+    <p id="state">Загружаю список…</p>
+    <div id="recommended" hidden>
+      <a class="primary" id="rec-link" href="#"></a>
+      <p class="muted" id="rec-note"></p>
+    </div>
+  </section>
+
+  <section class="panel" id="all" hidden>
+    <h2>Все платформы</h2>
+    <table>
+      <thead><tr><th>Система</th><th>Файл</th><th>Размер</th><th class="col-sha">SHA-256</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="muted">Прежние выпуски — <a href="https://github.com/avb56/kktsite-agent/releases">на GitHub</a>. Сверить скачанное:
+      <code>sha256sum файл</code> (Linux), <code>shasum -a 256 файл</code> (macOS),
+      <code>certutil -hashfile файл SHA256</code> (Windows).</p>
+  </section>
+
+  <section class="panel">
+    <h2>Что нужно заранее</h2>
+    <p>Драйвер ДТО 10 от Атола, версии 10.10.8.0 и новее — вместе со службой АТОЛ Connect (её ставит
+      установщик Атола). Сервер кассы пользуется установленным драйвером и сам его не содержит.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Установка</h2>
+    <ul>
+      <li><b>Windows:</b> распаковать zip, правый щелчок по <code>install.cmd</code> → «Запуск от имени
+        администратора». В архиве обе разрядности: установщик поставит ту, что совпадает с драйвером
+        Атола (64-разрядный агент не работает с 32-разрядным драйвером, и наоборот). Для Windows 7 —
+        отдельный архив <code>…-windows7.zip</code>; на ней нужен Universal CRT (обновление KB2999226).</li>
+      <li><b>Linux, macOS:</b> <code>tar xzf kktsite-agent-….tar.gz</code>, затем в распакованной папке
+        <code>sudo ./install.sh</code>.</li>
+    </ul>
+    <p>Затем откройте <a href="http://127.0.0.1:16732/" rel="noreferrer">http://127.0.0.1:16732/</a> на этом компьютере:
+      там добавьте ККТ и скопируйте адрес для кассы (тип подключения «Атол Сервер»). Сервер
+      обновляется сам — раз в сутки, с проверкой подписи; выключить можно на той же странице.</p>
+    <p class="muted">Удаление — <code>uninstall.cmd</code> / <code>sudo ./uninstall.sh</code> из той же папки;
+      настройки и список ККТ сохраняются.</p>
+  </section>
+</main>
+
+<script>
+  'use strict';
+  // Платформы выпуска (scripts/pack.mjs → sPlatformKey) — по-человечески.
+  const O_NAMES = {
+    windows: 'Windows 10/11, 32 и 64 бит',
+    windows7: 'Windows 7, 32 и 64 бит',
+    'linux-x64': 'Linux x64 (glibc 2.35+: Ubuntu 22.04, Debian 12 и новее)',
+    'linux-arm64': 'Linux ARM64',
+    'macos-arm64': 'macOS, Apple Silicon (M1 и новее)',
+    'macos-x64': 'macOS, Intel',
+  };
+  const $ = (s) => document.getElementById(s);
+
+  const sSize = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : `${Math.ceil(n / 1024)} КБ`);
+
+  /** Платформа посетителя, насколько её видно браузеру. */
+  /**
+   * Windows до 10-й (на деле — 7). Chrome урезает строку User-Agent, и на
+   * Windows 7 x86 она бывает «Windows NT 10.0» (заметка пользователя: Chrome 109
+   * на Win7 x86 предлагал сборку для 10/11). Точнее — UA Client Hints:
+   * platformVersion на Windows — версия UniversalApiContract, у Windows до 10
+   * её нет (мажор 0). Запасной путь — «Windows NT 6.1» в строке.
+   */
+  async function bOldWindows(sUa) {
+    try {
+      const oData = navigator.userAgentData;
+      if (oData && oData.platform === 'Windows' && oData.getHighEntropyValues) {
+        const { platformVersion } = await oData.getHighEntropyValues(['platformVersion']);
+        if (platformVersion) return Number(platformVersion.split('.')[0]) === 0;
+      }
+    } catch (oError) { /* нет подсказок — по строке */ }
+    return /Windows NT 6\.[0-3]/.test(sUa);
+  }
+
+  async function pGuessPlatform() {
+    const sUa = navigator.userAgent;
+    const sPlat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    if (/Win/i.test(sPlat) || /Windows/.test(sUa)) return (await bOldWindows(sUa)) ? 'windows7' : 'windows';
+    if (/Mac/i.test(sPlat) || /Mac OS X/.test(sUa)) return 'macos-arm64'; // процессор Mac браузер не говорит
+    if (/Linux/i.test(sPlat) || /Linux/.test(sUa)) return /aarch64|arm64/i.test(sUa + sPlat) ? 'linux-arm64' : 'linux-x64';
+    return '';
+  }
+
+  function fRow(sPlatform, oEntry) {
+    const oTr = document.createElement('tr');
+    const sName = oEntry.file.split('/').pop();
+    const aCells = [
+      O_NAMES[sPlatform] || sPlatform,
+      null,
+      sSize(oEntry.size),
+      null,
+    ];
+    aCells.forEach((v, n) => {
+      const oTd = document.createElement('td');
+      if (n === 1) {
+        const oA = document.createElement('a');
+        oA.href = oEntry.file;
+        oA.textContent = sName;
+        oA.setAttribute('download', '');
+        oTd.append(oA);
+      } else if (n === 3) {
+        oTd.className = 'col-sha';
+        const oCode = document.createElement('code');
+        oCode.className = 'sha';
+        oCode.textContent = oEntry.sha256;
+        const oBtn = document.createElement('button');
+        oBtn.className = 'copy';
+        oBtn.type = 'button';
+        oBtn.textContent = 'копировать';
+        oBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(oEntry.sha256).then(() => { oBtn.textContent = 'скопировано'; }, () => {
+            getSelection().selectAllChildren(oCode);
+          });
+        });
+        oTd.append(oCode, oBtn);
+      } else {
+        oTd.textContent = v;
+      }
+      oTr.append(oTd);
+    });
+    return oTr;
+  }
+
+  async function pStart() {
+    let oManifest;
+    try {
+      const oRes = await fetch('latest.json', { cache: 'no-store' });
+      if (!oRes.ok) throw new Error(`HTTP ${oRes.status}`);
+      oManifest = await oRes.json();
+    } catch (oError) {
+      $('state').className = 'error';
+      $('state').textContent = `Список выпусков не загрузился (${oError.message}). Все файлы — `;
+      const oA = document.createElement('a');
+      oA.href = 'files/';
+      oA.textContent = 'здесь';
+      $('state').append(oA, '.');
+      return;
+    }
+
+    // Для скачивания руками: Windows — zip (installers), остальным — tar.gz (files).
+    // Windows — один zip на обе разрядности (installers.windows); tar.gz под
+    // разрядность (files.windows-x64 / -ia32) — для самообновления, людям не показываем.
+    const oDownloads = { ...oManifest.files, ...(oManifest.installers || {}) };
+    for (const sFamily of ['windows', 'windows7']) {
+      if (oDownloads[sFamily]) for (const s of Object.keys(oDownloads)) if (s.startsWith(`${sFamily}-`)) delete oDownloads[s];
+    }
+    const aPlatforms = Object.keys(O_NAMES).filter((s) => oDownloads[s])
+      .concat(Object.keys(oDownloads).filter((s) => !O_NAMES[s]));
+
+    const sDate = oManifest.released ? new Date(oManifest.released).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+    // Без точки в конце: дата по-русски уже кончается на «г.».
+    $('state').textContent = `Версия ${oManifest.version}${sDate ? ` от ${sDate}` : ''}`;
+
+    const sGuess = await pGuessPlatform();
+    if (sGuess && oDownloads[sGuess]) {
+      const oEntry = oDownloads[sGuess];
+      $('rec-link').href = oEntry.file;
+      $('rec-link').setAttribute('download', '');
+      $('rec-link').textContent = `Скачать для ${O_NAMES[sGuess]} · ${sSize(oEntry.size)}`;
+      $('rec-note').textContent = sGuess.startsWith('macos')
+        ? 'На Mac с процессором Intel — файл macos-x64 в списке ниже (браузер не сообщает тип процессора).'
+        : sGuess === 'windows7'
+          ? 'Сборка для Windows 7 — на Node.js 12: новее на Windows 7 не запускается, а обновлений безопасности для него нет с 2022 года. Для кассы в закрытой локальной сети.'
+          : sGuess === 'windows'
+            ? 'Для Windows 7 — отдельная сборка в списке ниже.'
+            : 'Другая система — в списке ниже.';
+      $('recommended').hidden = false;
+    }
+
+    if (sGuess && !oDownloads[sGuess]) {
+      $('rec-note').textContent = `Для вашей системы (${O_NAMES[sGuess] || sGuess}) в этом выпуске сборки нет — список ниже.`;
+      $('rec-link').hidden = true;
+      $('recommended').hidden = false;
+    }
+
+    $('rows').replaceChildren(...aPlatforms.map((s) => fRow(s, oDownloads[s])));
+    $('all').hidden = false;
+  }
+
+  pStart();
+</script>
+</body>
+</html>

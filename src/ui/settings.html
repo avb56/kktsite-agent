@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сервер кассы</title>
+  <link rel="stylesheet" href="settings.css">
+  <script type="module" src="settings.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Сервер кассы</h1>
+      <p class="muted" id="server-line">…</p>
+    </div>
+  </header>
+
+  <main>
+    <div id="driver-alerts"></div>
+
+    <nav class="tabs" role="tablist" aria-label="Разделы">
+      <button type="button" role="tab" id="tab-access" data-tab="access">Доступ</button>
+      <button type="button" role="tab" id="tab-kkt" data-tab="kkt">ККТ</button>
+      <button type="button" role="tab" id="tab-connect" data-tab="connect">Подключение</button>
+      <button type="button" role="tab" id="tab-update" data-tab="update">Обновление</button>
+      <button type="button" role="tab" id="tab-settings" data-tab="settings">Общие</button>
+    </nav>
+
+    <section class="panel" data-pane="access" role="tabpanel" aria-labelledby="tab-access">
+      <h2>Доступ к серверу</h2>
+      <p class="muted" id="users-state"></p>
+      <ul class="users" id="users-list"></ul>
+      <form id="users-form" class="inline-form" autocomplete="off">
+        <label>Логин
+          <input name="name" required maxlength="64" pattern="[A-Za-z0-9_.@\-]+" autocomplete="off">
+        </label>
+        <label>Пароль
+          <input name="password" type="password" required minlength="8" autocomplete="new-password">
+        </label>
+        <button type="submit">Добавить или сменить пароль</button>
+      </form>
+      <p class="muted">С учётной записью касса подключается по адресу <code>http://логин:пароль@…/api/v2/</code>,
+        а эта страница спросит логин и пароль. Пока учёток нет — сервер открыт всем в локальной сети.</p>
+    </section>
+
+    <section class="panel" data-pane="kkt" role="tabpanel" aria-labelledby="tab-kkt">
+      <div class="panel-head">
+        <h2>ККТ</h2>
+        <button type="button" class="primary" id="add-device">Добавить ККТ</button>
+      </div>
+      <p class="muted" id="devices-empty" hidden>ККТ пока нет. Добавьте ККТ, с которой будет работать касса.</p>
+      <ul class="devices" id="devices"></ul>
+    </section>
+
+    <section class="panel" data-pane="connect" role="tabpanel" aria-labelledby="tab-connect">
+      <h2>Подключение кассы</h2>
+      <p>В кассе: <b>Настройки ККТ</b> → тип подключения <b>«Атол Сервер»</b>, адрес каждой ККТ — на
+        вкладке «ККТ» (<code>?deviceID=</code> выбирает ККТ). Адрес без <code>deviceID</code> — ККТ по умолчанию:</p>
+      <div class="copy-row">
+        <code id="kassa-url"></code>
+        <button type="button" id="copy-url">Скопировать</button>
+      </div>
+      <p class="muted">С другого компьютера сети вместо <code id="kassa-host"></code> — адрес этого
+        компьютера. Если на сервере заведены учётные записи, логин и пароль пишутся в адресе:
+        <code>http://логин:пароль@…</code></p>
+    </section>
+
+    <section class="panel" data-pane="update" role="tabpanel" aria-labelledby="tab-update">
+      <h2>Версия и обновление</h2>
+      <p id="update-version"></p>
+      <p class="error" id="update-error" hidden></p>
+      <div id="update-controls">
+        <label class="check-label">
+          <input type="checkbox" id="update-auto"> Обновляться автоматически (проверка раз в сутки)
+        </label>
+        <div class="actions">
+          <button type="button" id="update-check">Проверить обновления</button>
+          <button type="button" class="primary" id="update-install" hidden></button>
+        </div>
+        <p class="muted">Обновление скачивается с сайта, проверяется подписью, запускается пробно
+          и только потом заменяет текущую версию. Перезапускается агент, когда очереди ККТ пусты
+          (чек, который печатается, допечатается), — на несколько секунд касса не сможет печатать.</p>
+      </div>
+      <p class="muted">Все выпуски и сборки для других систем — <a id="update-downloads" href="https://dl.kktsite.ru/agent/" target="_blank" rel="noreferrer">страница загрузок</a>.</p>
+    </section>
+
+    <section class="panel" data-pane="connect" role="tabpanel" aria-labelledby="tab-connect">
+      <h2>HTTPS</h2>
+      <div id="https-off">
+        <p>Нужен, только если браузер кассы не пускает её к серверу по <code>http</code>: касса
+          открыта по https, и некоторые браузеры блокируют такие запросы. Chrome и Edge обычно
+          только спрашивают разрешение на доступ к устройствам локальной сети — тогда HTTPS не нужен.</p>
+        <button type="button" class="primary" id="https-issue">Выпустить сертификат и включить HTTPS</button>
+      </div>
+      <div id="https-on" hidden>
+        <p class="state" id="https-state"></p>
+        <p class="error" id="https-problem" hidden></p>
+        <div class="copy-row">
+          <code id="https-url"></code>
+          <button type="button" id="https-copy">Скопировать</button>
+        </div>
+        <p class="muted">Адрес для кассы — как выше, но с <code>https://</code> и этим портом.</p>
+        <dl class="cert" id="https-cert"></dl>
+        <div class="actions">
+          <a class="button" href="agent.crt" download>Скачать сертификат</a>
+          <button type="button" id="https-renew">Перевыпустить</button>
+          <button type="button" id="https-disable" class="danger-text">Выключить HTTPS</button>
+        </div>
+        <details>
+          <summary>Как доверить сертификату</summary>
+          <p>Браузер доверяет сертификату сервера, только если он установлен в систему кассового ПК.
+            Сверьте отпечаток SHA-256 при установке с тем, что выше.</p>
+          <ul>
+            <li><b>Windows:</b> открыть скачанный <code>kktsite-agent.crt</code> → «Установить
+              сертификат» → «Локальный компьютер» → «Поместить все сертификаты в следующее хранилище» →
+              «Доверенные корневые центры сертификации». Перезапустить браузер.</li>
+            <li><b>macOS:</b> открыть файл — он попадёт в «Связку ключей» → двойной щелчок по
+              «kktsite-agent» → «Доверие» → «Всегда доверять».</li>
+            <li><b>Linux, Chrome:</b> <code>chrome://certificate-manager</code> → «Локальные
+              сертификаты» → «Установленные вами» → «Импорт» в «Доверенные сертификаты».
+              Firefox: «Настройки» → «Сертификаты» → «Центры сертификации» → «Импортировать».</li>
+            <li><b>Проверить без установки:</b> открыть адрес выше в браузере кассы и согласиться
+              перейти на сайт — браузер запомнит исключение на время, но после перезапуска может
+              спросить снова.</li>
+          </ul>
+          <p class="muted">Перевыпущенному сертификату доверяют заново: он другой. Перевыпускать
+            нужно, когда у компьютера появился новый адрес или подходит срок — страница об этом скажет.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="panel" data-pane="settings" role="tabpanel" aria-labelledby="tab-settings">
+      <h2>Общие настройки</h2>
+      <form id="settings-form">
+        <label>Хранить выполненные задания, минут
+          <input type="number" name="deleteRequestsAfter" min="0" max="4294967295" step="1" required>
+        </label>
+        <p class="muted">43200 минут — 30 суток. Касса забирает результат сразу, дольше он нужен только для разбора.</p>
+        <label class="check-label">
+          <input type="checkbox" name="blockQueueOnPrintErrors"> Останавливать очередь, когда кончилась бумага
+        </label>
+        <p class="muted">Чек, закрытый в ФН без бумаги, допечатается, когда её вставят, и только потом
+          пойдут следующие. Без галочки следующие чеки пойдут сразу и завершатся ошибкой «Нет бумаги».
+          Обрыв связи посреди чека останавливает очередь всегда — иначе чек можно пробить дважды.</p>
+        <button type="submit">Сохранить</button>
+      </form>
+    </section>
+
+    <section class="panel" data-pane="settings" role="tabpanel" aria-labelledby="tab-settings">
+      <h2>Перезапуск сервера</h2>
+      <p class="muted" id="restart-none">Сервер запущен не службой — перезапустите его вручную.</p>
+      <div id="restart-panel" hidden>
+      <p class="muted">Нужен после обновления драйвера Атола: драйвер загружается при запуске сервера.
+        Сервер дождётся, пока очереди ККТ опустеют, и перезапустится — на несколько секунд касса не
+        сможет печатать.</p>
+      <button type="button" id="restart-button">Перезапустить сервер</button>
+      </div>
+    </section>
+  </main>
+
+  <div class="notify away" id="notify" role="status" aria-live="polite" hidden></div>
+
+  <template id="device-item">
+    <li class="device">
+      <div class="device-head">
+        <span class="dot"></span>
+        <div class="device-title">
+          <b class="name"></b> <span class="muted id"></span>
+          <span class="badge default-badge" hidden>по умолчанию</span>
+        </div>
+      </div>
+      <p class="summary muted"></p>
+      <p class="state"></p>
+      <p class="error" hidden></p>
+      <div class="copy-row kassa-row">
+        <span class="muted">Адрес в кассе:</span>
+        <code class="kassa"></code>
+        <button type="button" data-act="copy">Скопировать</button>
+      </div>
+      <div class="check" hidden></div>
+      <div class="actions">
+        <button type="button" data-act="toggle"></button>
+        <button type="button" data-act="check">Проверить связь</button>
+        <button type="button" data-act="default">Сделать по умолчанию</button>
+        <button type="button" data-act="edit">Настроить</button>
+        <button type="button" data-act="delete" class="danger-text">Удалить</button>
+      </div>
+    </li>
+  </template>
+
+  <dialog id="device-dialog">
+    <form id="device-form" method="dialog" novalidate>
+      <h2 id="device-dialog-title">ККТ</h2>
+      <div class="grid">
+        <label>Название
+          <input name="name" maxlength="128" required placeholder="Например, Касса у входа">
+        </label>
+        <label>Идентификатор
+          <input name="id" maxlength="16" pattern="[a-zA-Z0-9_\-]{1,16}" placeholder="по порядку">
+          <small class="muted">латиница, цифры, «_», «-»; потом не меняется</small>
+        </label>
+        <label>Модель
+          <select name="model"></select>
+        </label>
+        <label>Канал связи
+          <select name="port"></select>
+        </label>
+
+        <label data-port="usb">USB-устройство
+          <select name="usbDevice"></select>
+        </label>
+        <label data-port="com">Порт
+          <input name="com" list="com-list" maxlength="32" placeholder="/dev/ttyACM0 или 3">
+          <datalist id="com-list"></datalist>
+        </label>
+        <label data-port="com">Скорость
+          <select name="baudRate"></select>
+        </label>
+        <label data-port="tcp">IP-адрес ККТ
+          <input name="ipAddress" maxlength="128" placeholder="192.168.1.50">
+        </label>
+        <label data-port="tcp">IP-порт
+          <input name="ipPort" type="number" min="1" max="65535" placeholder="5555">
+        </label>
+        <label data-port="bluetooth">MAC-адрес
+          <input name="mac" pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" placeholder="00:11:22:33:44:55">
+        </label>
+
+        <label>Обмен с ОФД через кассу
+          <select name="ofdChannel"></select>
+        </label>
+      </div>
+
+      <details>
+        <summary>Пароли протокола ККТ</summary>
+        <p class="muted">Это не логин к серверу — учётные записи сервера на вкладке «Доступ». Эти пароли
+          передаются драйверу Атола при подключении к ККТ, как в «АТОЛ. Web Requests» («Пароль доступа»,
+          «Пароль пользователя по умолчанию»). Обычно пусты; заполнять, только если драйвер без них не
+          связывается с ККТ (ошибка «Неверный пароль»).</p>
+        <div class="grid">
+          <label>Пароль доступа
+            <input name="accessPassword" maxlength="16" autocomplete="off">
+          </label>
+          <label>Пароль пользователя
+            <input name="userPassword" maxlength="16" autocomplete="off">
+          </label>
+        </div>
+      </details>
+
+      <label class="check-label" id="activate-row">
+        <input type="checkbox" name="activate" checked> Подключить сразу
+      </label>
+
+      <p class="error" id="device-error" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" value="cancel" id="device-cancel">Отмена</button>
+        <button type="submit" class="primary" id="device-save">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <p id="confirm-text"></p>
+      <div class="dialog-actions">
+        <button value="cancel">Отмена</button>
+        <button value="ok" class="danger" id="confirm-ok">Удалить</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

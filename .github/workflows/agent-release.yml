@@ -1,0 +1,199 @@
+# Выпуск локального агента: архивы на все платформы.
+#
+# Запуск руками: Actions → agent-release → Run workflow. Версия — из
+# package.json или из поля при запуске.
+#
+# На каждой платформе: сборка обёртки драйвера, тесты, архив
+# (scripts/pack.mjs), затем установка ИЗ ЭТОГО АРХИВА службой, проверка, что
+# агент отвечает и поднимается после kill, удаление. Итог:
+#   * артефакт kktsite-agent-release с каталогом files/ — его подписывает и
+#     выкладывает на dl.kktsite.ru scripts/agent-ship.sh на машине выпускающего
+#     (ключ подписи в CI не хранится);
+#   * GitHub Release v<версия> с теми же архивами — архив всех выпусков (на
+#     dl.kktsite.ru остаётся только текущий, /agent/archive/ ведёт сюда).
+#     Подписанный latest.json к нему добавляет agent-ship.sh.
+#
+# ubuntu-22.04 — glibc 2.35: собранная обёртка не запустится на системах
+# старее (у «АТОЛ. Web Requests» то же требование).
+
+name: agent-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия x.y.z (пусто — из package.json)'
+        required: false
+
+jobs:
+  pack:
+    name: pack (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows — на Node 22 LTS: последний с 32-битной сборкой под Windows
+        # (до 04.2027). ia32 — для касс с 32-разрядным драйвером Атола на
+        # 64-битной Windows; ставится на 64-битном раннере — ровно этот случай.
+        include:
+          - { os: ubuntu-22.04, platform: linux-x64, node: 24, arch: x64 }
+          - { os: windows-latest, platform: windows-x64, node: 22, arch: x64 }
+          - { os: windows-latest, platform: windows-ia32, node: 22, arch: x86 }
+          # Windows 7: Node 12.22 — последний, что идёт на Win7 (Node 22 падает:
+          # EventSetInformation, Windows 8+). Собирается на Node 24 (npm и
+          # node-gyp знают Visual Studio 18), обёртка — под заголовки Node 12,
+          # в архив — node.exe 12 с nodejs.org и агент, собранный esbuild под node12.
+          - { os: windows-latest, platform: windows7-x64, node: 24, arch: x64, node12: x64, gyp_arch: x64 }
+          - { os: windows-latest, platform: windows7-ia32, node: 24, arch: x64, node12: x86, gyp_arch: ia32 }
+          - { os: macos-latest, platform: macos-arm64, node: 24, arch: arm64 }
+          - { os: macos-15-intel, platform: macos-x64, node: 24, arch: x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          architecture: ${{ matrix.arch }}
+
+      - name: npm ci
+        run: |
+          # npm 10 из Node 22 везёт node-gyp 11, а он не знает Visual Studio 18
+          # (2026), что стоит на windows-latest: «unknown version». Подменить
+          # node-gyp через npm_config_node_gyp не вышло — при подготовке
+          # git-зависимости npm ставит свой. npm 11 (как в Node 24) везёт
+          # node-gyp 12, который её знает. Сам Node остаётся 22.
+          if [ "$RUNNER_OS" = Windows ] && [ "${{ matrix.node }}" = 22 ]; then
+            npm install -g npm@11
+            echo "npm $(npm --version), node $(node --version) $(node -p process.arch)"
+          fi
+          if [ -n "${{ matrix.node12 }}" ]; then
+            export npm_config_target=12.22.12 npm_config_runtime=node \
+              npm_config_disturl=https://nodejs.org/dist npm_config_arch=${{ matrix.gyp_arch }}
+            echo "обёртка — под Node $npm_config_target $npm_config_arch"
+          fi
+          for n in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci не удался (попытка $n), повторяю"
+            sleep 10
+          done
+          exit 1
+
+      - run: npm test
+
+      - name: Node 12 для Windows 7
+        if: matrix.node12
+        run: |
+          F=node-v12.22.12-win-${{ matrix.node12 }}.zip
+          mkdir -p dist/node12 && cd dist/node12
+          curl -fsSLO "https://nodejs.org/dist/v12.22.12/$F"
+          curl -fsSL https://nodejs.org/dist/v12.22.12/SHASUMS256.txt | grep " $F\$" | sha256sum -c -
+          # В Git Bash tar — GNU, zip он не берёт; системный tar.exe (bsdtar) — берёт.
+          /c/Windows/System32/tar.exe -xf "$F"
+          cp node-v12.22.12-win-${{ matrix.node12 }}/node.exe .
+          ./node.exe -p "process.version + ' ' + process.arch"
+
+      - name: архив
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          LEGACY=()
+          [ -n "${{ matrix.node12 }}" ] && LEGACY=(--node-binary dist/node12/node.exe --platform ${{ matrix.platform }} --bundle-node12)
+          node scripts/pack.mjs --out dist ${VERSION:+--version "$VERSION"} "${LEGACY[@]}"
+
+      # Проверяется то, что уйдёт кассам: архив распаковывается тем же кодом,
+      # что у самообновления, и ставится его же install.
+      - name: установка из архива
+        run: |
+          # В рабочем каталоге, не в $RUNNER_TEMP: на Windows тот с обратными
+          # слешами, и bash прочёл бы их в шаблоне как экранирование.
+          ARCHIVE=$(ls dist/files/*.tar.gz)
+          node --input-type=module -e "import('./src/tar.js').then((m) => m.pExtractTarGz(process.argv[1], process.argv[2]))" "$ARCHIVE" dist/x
+          PKG=$(ls -d "$PWD"/dist/x/kktsite-agent-*)
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$PKG/node/node.exe" "$PKG/app/src/main.js" install --port 16733
+          else
+            sudo "$PKG/install.sh" --port 16733
+          fi
+
+      - name: агент из установки отвечает и перезапускается после kill
+        run: |
+          node scripts/ci-service-check.mjs 16733
+          # Без tee /dev/stderr: в Git Bash на Windows его нет.
+          STATUS=$(curl -s http://127.0.0.1:16733/api/v2/agentUpdate)
+          echo "$STATUS"
+          echo "$STATUS" | grep -q '"installed":true'
+
+      - name: удаление
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            "$PKG/node/node.exe" "$PKG/app/src/main.js" uninstall
+          else
+            sudo "$PKG/uninstall.sh"
+          fi
+          node scripts/ci-service-check.mjs 16733 --stopped
+
+      - name: журнал агента
+        if: always()
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo journalctl -u kktsite-agent --no-pager -n 100 || true ;;
+            macOS) cat "$HOME/Library/Application Support/kktsite-agent/agent.log" || true ;;
+            # $PROGRAMDATA в Git Bash пуст (переменная — ProgramData): читаем через node.
+            Windows) node -e "const p = require('path').join(process.env.ProgramData, 'kktsite-agent'); for (const f of ['agent.log', 'run.cmd']) { try { console.log('== ' + f + '\n' + require('fs').readFileSync(require('path').join(p, f), 'utf8')); } catch (e) { console.log(e.message); } }" ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kktsite-agent-${{ matrix.platform }}
+          path: dist/files/*
+          if-no-files-found: error
+
+  collect:
+    needs: pack
+    runs-on: ubuntu-latest
+    # Создать GitHub Release с архивами.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kktsite-agent-*
+          path: release/files
+          merge-multiple: true
+      # Один zip на обе разрядности — для установки руками (Проводник его открывает).
+      - name: Windows-zip (10/11 и 7)
+        run: |
+          for F in windows windows7; do
+            node scripts/pack-windows.mjs release/files --family $F
+            unzip -tq release/files/kktsite-agent-*-$F.zip
+            python3 -c "import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print(sys.argv[1], len(z.infolist()), 'записей')" release/files/kktsite-agent-*-$F.zip
+          done
+      - run: ls -la release/files
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kktsite-agent-release
+          path: release
+
+      # Архив выпусков — GitHub Release v<версия>. Та же версия второй раз не
+      # выпускается: тег уже есть, gh откажет — как agent-ship.sh, когда на
+      # узле лежит другая сборка той же версии. Поднимите версию.
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          V="${VERSION:-$(node -p "require('./package.json').version")}"
+          (cd release/files && sha256sum -- * > SHA256SUMS)
+          gh release create "v$V" release/files/* \
+            --target "$GITHUB_SHA" \
+            --title "kktsite-agent $V" \
+            --notes "Архивы на все платформы; SHA256SUMS — суммы. Установка — https://dl.kktsite.ru/agent/. Подписанный latest.json добавляется при выкладке на dl.kktsite.ru."

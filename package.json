@@ -1,0 +1,32 @@
+{
+  "name": "kktsite-agent",
+  "version": "0.2.4",
+  "private": true,
+  "description": "Локальный сервер кассы: ККТ Атол через драйвер ДТО 10, API как у «АТОЛ. Web Requests»",
+  "type": "module",
+  "main": "src/main.js",
+  "bin": {
+    "kktsite-agent": "src/main.js"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "node-atol-wrapper": "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0"
+  },
+  "allowScripts": {
+    "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0": true
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/avb56/kktsite-agent.git"
+  }
+}
