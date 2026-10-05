@@ -1,6 +1,6 @@
 {
   "name": "kktsite-agent",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "private": true,
   "description": "Локальный сервер кассы: ККТ Атол через драйвер ДТО 10, API как у «АТОЛ. Web Requests»",
   "type": "module",
