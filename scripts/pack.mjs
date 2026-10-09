@@ -125,7 +125,9 @@ async function pBundleNode12(sSrcOut) {
     platform: 'node',
     format: 'cjs',
     target: 'node12',
-    external: ['node-atol-wrapper'],
+    // kkt-core — обфусцированный выпуск: пересборка ломает его (selfDefending),
+    // поэтому он едет в node_modules как есть, а не внутрь main.js.
+    external: ['node-atol-wrapper', 'kkt-core'],
     define: { 'import.meta.url': '__kktImportMetaUrl' },
     banner: { js: "'use strict';\nconst __kktImportMetaUrl = require('url').pathToFileURL(__filename).href;" },
     plugins: [{
