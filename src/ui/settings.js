@@ -642,20 +642,24 @@ async function pLoadSettings() {
   const oSettings = await pApi('GET', 'settings');
   $('settings-form').elements.deleteRequestsAfter.value = oSettings.deleteRequestsAfter;
   $('settings-form').elements.blockQueueOnPrintErrors.checked = oSettings.blockQueueOnPrintErrors;
+  $('settings-form').elements.cancelWaitingRequestsAfter.value = oSettings.cancelWaitingRequestsAfter;
 }
 
 async function pSaveSettings(oEvent) {
   oEvent.preventDefault();
   const oEl = $('settings-form').elements;
   const oInput = oEl.deleteRequestsAfter;
-  if (!oInput.checkValidity()) {
-    oNotify.error(oInput.validationMessage);
-    return;
+  for (const oField of [oInput, oEl.cancelWaitingRequestsAfter]) {
+    if (!oField.checkValidity()) {
+      oNotify.error(oField.validationMessage);
+      return;
+    }
   }
   try {
     await pApi('PUT', 'settings', {
       deleteRequestsAfter: Number(oInput.value),
       blockQueueOnPrintErrors: oEl.blockQueueOnPrintErrors.checked,
+      cancelWaitingRequestsAfter: Number(oEl.cancelWaitingRequestsAfter.value),
     });
     oNotify.success('Настройки сохранены');
   } catch (oError) {

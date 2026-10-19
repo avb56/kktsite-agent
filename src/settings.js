@@ -1,8 +1,9 @@
 // Общие настройки агента — GET/PUT /api/v2/settings, формат Web Requests
 // (GlobalSettings). Хранятся в settings.json каталога данных.
 //
-// Применяются deleteRequestsAfter (в минутах) и blockQueueOnPrintErrors
-// (device.js, «Блокировка очереди»). Остальные поля принимаются и хранятся,
+// Применяются deleteRequestsAfter (в минутах), blockQueueOnPrintErrors
+// (device.js, «Блокировка очереди») и cancelWaitingRequestsAfter — своя
+// настройка агента, у Web Requests её нет (device.js, «Срок ожидания»). Остальные поля принимаются и хранятся,
 // чтобы настройки переносились между Web Requests и агентом как есть, но агент
 // по ним ещё ничего не делает: задания не проверяются при добавлении
 // (validateRequestsOnAdd), скрипты ДТО и доп. строки документа не подключены.
@@ -22,6 +23,8 @@ const O_DEFAULTS = {
   blockQueueOnPrintErrors: true,
   deleteRequestsAfter: 43200,
   validateRequestsOnAdd: false,
+  // Секунды; 0 — ждущие задания не отменяются (как у Web Requests).
+  cancelWaitingRequestsAfter: 120,
 };
 
 let oSettings = null;
@@ -37,6 +40,7 @@ export function oGetSettings() {
 function fApply(oNew) {
   oQueueOptions.nKeepMinutes = oNew.deleteRequestsAfter;
   oQueueOptions.bBlockOnPrintErrors = oNew.blockQueueOnPrintErrors;
+  oQueueOptions.nWaitLimitSec = oNew.cancelWaitingRequestsAfter;
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */
@@ -45,7 +49,7 @@ export function oPutSettings(oNew) {
   const oNext = { ...oGetSettings() };
   for (const [sKey, vValue] of Object.entries(oNew)) {
     if (!(sKey in O_DEFAULTS)) continue;
-    const bOk = sKey === 'deleteRequestsAfter'
+    const bOk = sKey === 'deleteRequestsAfter' || sKey === 'cancelWaitingRequestsAfter'
       ? Number.isInteger(vValue) && vValue >= 0 && vValue <= 4294967295
       : typeof vValue === typeof O_DEFAULTS[sKey];
     if (!bOk) throw new AgentError(400, `Некорректное значение или тип поля '${sKey}' (${typeof vValue})`);

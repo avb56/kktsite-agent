@@ -19,7 +19,7 @@
 import { oCreateHandle } from './driver.js';
 
 /** Общие настройки очередей; меняет settings.js по PUT /settings. */
-export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000 };
+export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000, nWaitLimitSec: 120 };
 
 // ——— Блокировка очереди (как у Web Requests, спецификация 1.0.4.0) ———
 //
@@ -75,6 +75,7 @@ export const O_DEFAULT_OTHER = {
 const O_ERR_OK = { code: 0, description: 'Ошибок нет' };
 const O_ERR_INTERRUPTED = { code: 502, description: 'Выполнение прервано из-за предыдущих ошибок' };
 const O_ERR_CANCELED = { code: 503, description: 'Задание отменено' };
+const O_ERR_EXPIRED = { code: 503, description: 'Задание отменено: слишком долго ждало очереди' };
 
 /** Ошибка с HTTP-кодом ответа — её отдаёт сервер как { error: { code: 505, description } }. */
 export class AgentError extends Error {
@@ -256,6 +257,7 @@ export class Device {
       sState: 'wait',
       nNext: 0, // с какой задачи продолжать: после блокировки задание продолжается, а не начинается заново
       nDoneAt: 0,
+      nAddedAt: Date.now(),
     });
     this.aWaiting.push(sUuid);
     this.fPump();
@@ -325,6 +327,7 @@ export class Device {
       this.aWaiting.unshift(oRequest.sUuid);
       return;
     }
+    if (this.bExpired(oRequest)) return this.fExpire(oRequest);
     oRequest.sState = 'inProgress';
     for (let n = oRequest.nNext; n < oRequest.aTasks.length; n += 1) {
       const oTask = oRequest.aTasks[n];
@@ -355,6 +358,24 @@ export class Device {
       }
     }
     this.fFinish(oRequest, oRequest.aTasks.length);
+  }
+
+  // Срок ожидания (cancelWaitingRequestsAfter — настройка агента, у Web
+  // Requests её нет). Задание, которое касса бросила — кассир прервал
+  // ожидание, закрыл вкладку, касса упала, — иначе выполнилось бы, когда ККТ
+  // освободится или её включат, хоть через дни: чек без кассира, который
+  // к тому времени пробил его заново. Касса за это время ждать перестаёт
+  // точно: вопрос «Прервать?» kkt-core задаёт через ~40 с. Только не начатое:
+  // задание, продолженное после блокировки (nNext > 0), доводится до конца.
+  bExpired(oRequest) {
+    const nLimitMs = oQueueOptions.nWaitLimitSec * 1000;
+    return nLimitMs > 0 && oRequest.nNext === 0 && Date.now() - oRequest.nAddedAt > nLimitMs;
+  }
+
+  fExpire(oRequest) {
+    oRequest.sState = 'canceled';
+    oRequest.nDoneAt = Date.now();
+    oRequest.aResults = oRequest.aTasks.map(() => ({ error: O_ERR_EXPIRED, status: 'canceled' }));
   }
 
   /** Задание завершено: задачи с nFrom — interrupted (после ошибки). */

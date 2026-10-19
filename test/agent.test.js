@@ -598,3 +598,38 @@ test('задание кассы подключает включённую ККТ
   oKkt.bPowered = true;
   assert.equal((await pPost('sw-on')).status, 201, 'включили — принято с первого раза');
 });
+
+test('ждущее задание старше срока отменяется, а не выполняется, когда очередь пойдёт', async (t) => {
+  Object.assign(oKkt, { bScenario: true, bOnline: true, bPaper: true, sSell: 'lostBeforeClose', aLog: [] });
+  assert.equal((await pCall('GET', '/settings')).oBody.cancelWaitingRequestsAfter, 120, 'по умолчанию 2 минуты');
+  assert.equal((await pCall('PUT', '/settings', { cancelWaitingRequestsAfter: -1 })).nStatus, 400);
+  // Очередь встаёт на сбое посреди чека; за ним — чек, который касса бросила.
+  await pCall('PUT', '/settings', { cancelWaitingRequestsAfter: 1 });
+  t.after(async () => { oKkt.bScenario = false; oKkt.bOnline = true; await pCall('PUT', '/settings', { cancelWaitingRequestsAfter: 120 }); });
+  await pCall('POST', '/requests', { uuid: 'w1', request: [{ type: 'sell' }, { type: 'reportX' }] });
+  await pUntil(async () => (await pQueue()).isBlocked, 'блокировки');
+  await pCall('POST', '/requests', { uuid: 'w2', request: [{ type: 'sell' }] });
+  await new Promise((f) => setTimeout(f, 1200));
+  assert.deepEqual(await aStatuses('w2'), ['wait'], 'пока очередь стоит — ждёт');
+
+  oKkt.bOnline = true;
+  oKkt.sSell = 'ok';
+  await pWaitDone('w2');
+  const [oW2] = (await pCall('GET', '/requests/w2')).oBody.results;
+  assert.deepEqual(oW2, { error: { code: 503, description: 'Задание отменено: слишком долго ждало очереди' }, status: 'canceled' });
+  assert.equal(oKkt.aLog.filter((s) => s === 'sell').length, 1, 'второй чек не пробит');
+  assert.deepEqual((await pCall('GET', '/requests/w1')).oBody.results.map((o) => o.status), ['error', 'interrupted'],
+    'задание со сбоем доведено до исхода, срок его не касается');
+});
+
+test('продолженное после блокировки задание срок не отменяет', async (t) => {
+  Object.assign(oKkt, { bScenario: true, bOnline: true, bPaper: true, sSell: 'lostAfterClose', aLog: [] });
+  await pCall('PUT', '/settings', { cancelWaitingRequestsAfter: 1 });
+  t.after(async () => { oKkt.bScenario = false; oKkt.bOnline = true; await pCall('PUT', '/settings', { cancelWaitingRequestsAfter: 120 }); });
+  await pCall('POST', '/requests', { uuid: 'w3', request: [{ type: 'sell' }, { type: 'reportX' }] });
+  await pUntil(async () => (await pQueue()).isBlocked, 'блокировки');
+  await new Promise((f) => setTimeout(f, 1200));
+  oKkt.bOnline = true;
+  await pWaitDone('w3');
+  assert.deepEqual(await aStatuses('w3'), ['ready', 'ready'], 'чек закрылся, X-отчёт после него выполнен');
+});
