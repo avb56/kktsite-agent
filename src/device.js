@@ -19,7 +19,7 @@
 import { oCreateHandle } from './driver.js';
 
 /** Общие настройки очередей; меняет settings.js по PUT /settings. */
-export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000 };
+export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000 };
 
 // ——— Блокировка очереди (как у Web Requests, спецификация 1.0.4.0) ———
 //
@@ -143,6 +143,8 @@ export class Device {
     this.oBlock = null;
     this.nRecoverTimer = 0;
     this.bReopen = false; // дескриптор закрыт после обрыва, новый ещё не открылся
+    this.nReconnectTimer = 0;
+    this.fLog = null; // журнал агента: о подключении после повторов (registry.js)
   }
 
   /** Описание для /devices и для файла devices.json. */
@@ -182,6 +184,7 @@ export class Device {
       } catch (oError) {
         if (oHandle) try { oHandle.fClose(); } catch { /* не открылась — закрывать нечего */ }
         this.sLastError = oTaskError(oError).description;
+        this.fScheduleReconnect();
         throw new AgentError(409, `ККТ [${this.id}] не подключилась: ${this.sLastError}`);
       }
       this.oHandle = oHandle;
@@ -193,9 +196,34 @@ export class Device {
     });
   }
 
+  // ККТ хотят подключённой, а она не подключилась — была выключена, когда
+  // агент запускался. Пробуем снова, пока не выйдет или её не отключат руками:
+  // иначе касса до перезапуска агента получала бы «ККТ не подключена», хотя
+  // ККТ давно включили. Выключение ККТ на ходу драйвер переживает сам
+  // (USB проверено на АТОЛ 30Ф: задание ждёт и выполняется после включения).
+  fScheduleReconnect() {
+    if (this.nReconnectTimer || this.oHandle || !this.bWantActive) return;
+    this.nReconnectTimer = setTimeout(() => {
+      this.nReconnectTimer = 0;
+      this.pReconnect();
+    }, oQueueOptions.nReconnectMs);
+    this.nReconnectTimer.unref?.();
+  }
+
+  /** Попытка подключить ККТ, которую хотят подключённой. Не бросает. */
+  pReconnect() {
+    if (this.oHandle || !this.bWantActive) return Promise.resolve();
+    return this.pActivate().then(
+      () => this.fLog?.(`ККТ [${this.id}] ${this.name}: подключена`),
+      () => { /* причина — в sLastError; следующая попытка уже назначена */ },
+    );
+  }
+
   /** Отключить ККТ: дождаться текущей задачи и закрыть драйвер. Очередь ждёт. */
   pDeactivate() {
     this.bWantActive = false;
+    clearTimeout(this.nReconnectTimer);
+    this.nReconnectTimer = 0;
     return this.pSerial(() => {
       if (!this.oHandle) return;
       if (!this.bReopen) this.oHandle.fClose(); // при bReopen он уже закрыт

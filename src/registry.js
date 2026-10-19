@@ -119,14 +119,14 @@ export class Registry {
   /** Подключить ККТ, которые были подключены при прошлой остановке. */
   async pRestore(fLog) {
     for (const oDevice of this.mDevices.values()) {
+      oDevice.fLog = fLog;
       if (!oDevice.bWantActive) continue;
       await oDevice.pActivate().then(
         () => fLog(`ККТ [${oDevice.id}] ${oDevice.name}: подключена`),
         (oError) => {
-          // Остаётся «хотят подключённой»: не вышло сейчас (ККТ выключена) —
-          // подключат руками или при следующем запуске.
-          oDevice.bWantActive = true;
-          fLog(`ККТ [${oDevice.id}] ${oDevice.name}: ${oError.message}`);
+          // Не вышло сейчас (ККТ выключена) — агент будет пробовать снова
+          // (Device.fScheduleReconnect), пока ККТ не включат.
+          fLog(`ККТ [${oDevice.id}] ${oDevice.name}: ${oError.message} — подключусь, когда ККТ включат`);
         },
       );
     }

@@ -30,6 +30,7 @@ const oKkt = {
   bPaper: true,
   sSell: 'ok', // ok | lostAfterClose | lostBeforeClose | notPrinted | fail
   aLog: [],
+  bPowered: true, // ККТ «switchable» включена: открывается драйвером
 };
 const fDriverError = (nCode, sText) => Object.assign(new Error(sText), { code: nCode, description: sText });
 
@@ -68,6 +69,7 @@ const aOpened = [];
 fSetDriverFactory(() => ({
   fOpen(oSettings) {
     if (oSettings.UsbDevicePath === 'broken') throw fDriverError(2, 'Нет связи');
+    if (oSettings.UsbDevicePath === 'switchable' && !oKkt.bPowered) throw fDriverError(1, 'Порт недоступен');
     aOpened.push(oSettings);
   },
   async pProcess(oTask) {
@@ -532,4 +534,67 @@ test('после перезапуска подключённая ККТ подк
   await oRegistry.pRestore(() => {});
   assert.ok(oRegistry.oGet('1').oHandle, 'ККТ 1 была подключена — подключилась снова');
   assert.equal(oRegistry.oGet('2').oHandle, null, 'ККТ 2 не подключалась — так и осталась');
+});
+
+test('ККТ выключена при запуске агента — подключается, когда её включат', async (t) => {
+  oKkt.bPowered = true;
+  const { oBody } = await pCall('POST', '/devices', { name: 'Switchable', connectionSettings: { port: 'usb', usbDevice: 'switchable' } });
+  assert.equal((await pCall('POST', `/activateDevice?deviceID=${oBody.id}`)).nStatus, 200);
+  t.after(async () => {
+    oQueueOptions.nReconnectMs = 5000;
+    oKkt.bPowered = true;
+    await pCall('DELETE', `/devices/${oBody.id}`);
+  });
+
+  // Перезапуск агента при выключенной ККТ: подключиться не вышло — не беда.
+  oKkt.bPowered = false;
+  oQueueOptions.nReconnectMs = 20;
+  const aLog = [];
+  const oRegistry = new Registry();
+  await oRegistry.pRestore((s) => aLog.push(s));
+  const oDevice = oRegistry.oGet(oBody.id);
+  assert.equal(oDevice.oHandle, null);
+  assert.equal(oDevice.oDescribe().lastError, 'Порт недоступен');
+  assert.match(aLog.at(-1), /подключусь, когда ККТ включат/);
+
+  // Выключена — пробует снова и снова, но не подключается.
+  await new Promise((f) => setTimeout(f, 100));
+  assert.equal(oDevice.oHandle, null);
+
+  oKkt.bPowered = true;
+  await pUntil(async () => oDevice.oHandle !== null, 'подключения по таймеру');
+  assert.match(aLog.at(-1), /Switchable: подключена$/);
+  assert.equal(oDevice.oDescribe().isActive, true);
+  await oDevice.pDeactivate();
+  assert.equal(oDevice.nReconnectTimer, 0, 'отключили руками — повторов нет');
+});
+
+test('задание кассы подключает включённую ККТ сразу, не дожидаясь таймера', async (t) => {
+  oKkt.bPowered = true;
+  const { oBody } = await pCall('POST', '/devices', { name: 'Switchable2', connectionSettings: { port: 'usb', usbDevice: 'switchable' } });
+  await pCall('POST', `/activateDevice?deviceID=${oBody.id}`);
+  oKkt.bPowered = false;
+  oQueueOptions.nReconnectMs = 60_000; // таймер не успеет — подключает само задание
+  const oRegistry = new Registry();
+  await oRegistry.pRestore(() => {});
+  const oServer2 = oCreateAgentServer({ oRegistry, sVersion: 'test', oHttps });
+  await new Promise((f) => oServer2.listen(0, '127.0.0.1', f));
+  t.after(async () => {
+    oServer2.close();
+    oQueueOptions.nReconnectMs = 5000;
+    oKkt.bPowered = true;
+    await oRegistry.oGet(oBody.id).pDeactivate();
+    await pCall('DELETE', `/devices/${oBody.id}`);
+  });
+  const sBase2 = `http://127.0.0.1:${oServer2.address().port}/api/v2`;
+  const pPost = (sUuid) => fetch(`${sBase2}/requests?deviceID=${oBody.id}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuid: sUuid, request: [{ type: 'getDeviceStatus' }] }),
+  });
+
+  const oOff = await pPost('sw-off');
+  assert.equal(oOff.status, 409, 'выключена — задание не принято');
+  assert.match((await oOff.json()).error.description, /не подключена: Порт недоступен/);
+
+  oKkt.bPowered = true;
+  assert.equal((await pPost('sw-on')).status, 201, 'включили — принято с первого раза');
 });

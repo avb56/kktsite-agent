@@ -300,7 +300,11 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
 
     if (sPath === '/api/v2/requests' && sMethod === 'POST') {
       const oBody = await pReadJson(oReq);
-      return fSend(oRes, 201, oRegistry.oGet(sDeviceId).oAddRequest(oBody.uuid, oBody.request));
+      const oDevice = oRegistry.oGet(sDeviceId);
+      // ККТ включили после запуска агента — подключить сейчас, а не ждать
+      // следующей попытки по таймеру.
+      await oDevice.pReconnect();
+      return fSend(oRes, 201, oDevice.oAddRequest(oBody.uuid, oBody.request));
     }
 
     const aRequest = /^\/api\/v2\/requests\/([^/]+)$/.exec(sPath);
