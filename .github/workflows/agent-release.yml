@@ -31,21 +31,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Node — точной версией: этот node.exe уезжает кассам в архиве, а
+        # setup-node с одной мажорной берёт то, что есть в кэше раннера, и
+        # 0.2.6 так уехал на 24.21.0 и 22.23.3 — без исправления brotli
+        # (CVE-2026-111497, выпуск Node 21.10.2026). Вышел выпуск безопасности
+        # Node — поднять здесь и выпустить агент.
+        #
         # Windows — на Node 22 LTS: последний с 32-битной сборкой под Windows
         # (до 04.2027). ia32 — для касс с 32-разрядным драйвером Атола на
         # 64-битной Windows; ставится на 64-битном раннере — ровно этот случай.
         include:
-          - { os: ubuntu-22.04, platform: linux-x64, node: 24, arch: x64 }
-          - { os: windows-latest, platform: windows-x64, node: 22, arch: x64 }
-          - { os: windows-latest, platform: windows-ia32, node: 22, arch: x86 }
+          - { os: ubuntu-22.04, platform: linux-x64, node: 24.22.1, arch: x64 }
+          - { os: windows-latest, platform: windows-x64, node: 22.23.4, arch: x64 }
+          - { os: windows-latest, platform: windows-ia32, node: 22.23.4, arch: x86 }
           # Windows 7: Node 12.22 — последний, что идёт на Win7 (Node 22 падает:
           # EventSetInformation, Windows 8+). Собирается на Node 24 (npm и
           # node-gyp знают Visual Studio 18), обёртка — под заголовки Node 12,
           # в архив — node.exe 12 с nodejs.org и агент, собранный esbuild под node12.
-          - { os: windows-latest, platform: windows7-x64, node: 24, arch: x64, node12: x64, gyp_arch: x64 }
-          - { os: windows-latest, platform: windows7-ia32, node: 24, arch: x64, node12: x86, gyp_arch: ia32 }
-          - { os: macos-latest, platform: macos-arm64, node: 24, arch: arm64 }
-          - { os: macos-15-intel, platform: macos-x64, node: 24, arch: x64 }
+          - { os: windows-latest, platform: windows7-x64, node: 24.22.1, arch: x64, node12: x64, gyp_arch: x64 }
+          - { os: windows-latest, platform: windows7-ia32, node: 24.22.1, arch: x64, node12: x86, gyp_arch: ia32 }
+          - { os: macos-latest, platform: macos-arm64, node: 24.22.1, arch: arm64 }
+          - { os: macos-15-intel, platform: macos-x64, node: 24.22.1, arch: x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -59,6 +65,11 @@ jobs:
           node-version: ${{ matrix.node }}
           architecture: ${{ matrix.arch }}
 
+      - name: node той версии, что в матрице
+        run: |
+          echo "node $(node --version) $(node -p process.arch)"
+          [ "$(node --version)" = "v${{ matrix.node }}" ]
+
       - name: npm ci
         run: |
           # npm 10 из Node 22 везёт node-gyp 11, а он не знает Visual Studio 18
@@ -66,7 +77,7 @@ jobs:
           # node-gyp через npm_config_node_gyp не вышло — при подготовке
           # git-зависимости npm ставит свой. npm 11 (как в Node 24) везёт
           # node-gyp 12, который её знает. Сам Node остаётся 22.
-          if [ "$RUNNER_OS" = Windows ] && [ "${{ matrix.node }}" = 22 ]; then
+          if [ "$RUNNER_OS" = Windows ] && [[ "${{ matrix.node }}" == 22.* ]]; then
             npm install -g npm@11
             echo "npm $(npm --version), node $(node --version) $(node -p process.arch)"
           fi
