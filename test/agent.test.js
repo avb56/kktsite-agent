@@ -176,6 +176,9 @@ test('ошибка задачи прерывает остальные', async ()
   assert.deepEqual(aResults.map((o) => o.status), ['ready', 'error', 'interrupted']);
   assert.deepEqual(aResults[1].error, { code: 501, description: 'Ошибка парсинга запроса' });
   assert.deepEqual(aResults[2].error, { code: 502, description: 'Выполнение прервано из-за предыдущих ошибок' });
+  // Как у Web Requests (снято 29.10.2026): result есть и у ошибки, и у прерванной.
+  assert.equal(aResults[1].result, null);
+  assert.equal(aResults[2].result, null);
 });
 
 test('отмена: ждущее — можно, выполненное — 409', async () => {

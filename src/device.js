@@ -6,7 +6,8 @@
 // же, чтобы она работала с ним без правок:
 //   — задание: { uuid, request: [задачи] }; задачи выполняются по порядку;
 //   — у каждой задачи статус: wait → inProgress → ready | error; после первой
-//     ошибки остальные задачи задания — interrupted, код 502;
+//     ошибки остальные задачи задания — interrupted, код 502; у error и
+//     interrupted result: null, как у ready без результата (снято 29.10.2026);
 //   — повторный uuid — 409; неизвестный — 404; отменить можно только
 //     ждущее задание, иначе 409;
 //   — выполненные задания хранятся deleteRequestsAfter минут (43200 = 30
@@ -353,7 +354,7 @@ export class Device {
           oRequest.aResults[n] = { error: oTaskErr, status: 'blocked' };
           return this.fBlock({ sReason, oRequest, nTask: n, nFdBefore, oError: oTaskErr });
         }
-        oRequest.aResults[n] = { error: oTaskErr, status: 'error' };
+        oRequest.aResults[n] = { error: oTaskErr, status: 'error', result: null };
         return this.fFinish(oRequest, n + 1);
       }
     }
@@ -381,7 +382,7 @@ export class Device {
   /** Задание завершено: задачи с nFrom — interrupted (после ошибки). */
   fFinish(oRequest, nFrom) {
     for (let n = nFrom; n < oRequest.aTasks.length; n += 1) {
-      oRequest.aResults[n] = { error: O_ERR_INTERRUPTED, status: 'interrupted' };
+      oRequest.aResults[n] = { error: O_ERR_INTERRUPTED, status: 'interrupted', result: null };
     }
     oRequest.sState = 'done';
     oRequest.nDoneAt = Date.now();
@@ -424,7 +425,7 @@ export class Device {
       const nFdNow = await this.pFdNumber();
       if (nFdNow <= oBlock.nFdBefore) {
         // Документ не закрылся: задача — ошибкой, с которой оборвалась.
-        oRequest.aResults[nTask] = { error: oBlock.oError, status: 'error' };
+        oRequest.aResults[nTask] = { error: oBlock.oError, status: 'error', result: null };
         this.oBlock = null;
         this.fFinish(oRequest, nTask + 1);
         return;
