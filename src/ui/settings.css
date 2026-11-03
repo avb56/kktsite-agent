@@ -90,7 +90,9 @@ button:hover:not(:disabled), a.button:hover { filter: brightness(1.1); }
 dl.cert { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0; font-size: 14px; }
 dl.cert dt { color: var(--muted); }
 dl.cert dd { margin: 0; overflow-wrap: anywhere; }
-#https-on .actions, #update-controls .actions { margin-left: 0; }
+#https-on .actions, #update-controls .actions, #piot-result .actions { margin-left: 0; }
+#piot-url { width: 22em; max-width: 100%; }
+#piot-result .state { margin-left: 0; }
 details ul { padding-left: 20px; }
 details li { margin: 6px 0; }
 button:disabled { opacity: .55; cursor: default; }

@@ -636,6 +636,96 @@ async function pHttpsAction(sAction, oButton) {
   }
 }
 
+// ——— модуль ТС ПИоТ ———
+
+const O_PIOT_TRUST = {
+  system: 'сертификату доверяет система',
+  first: 'сертификат запомнен при первом подключении',
+  pinned: 'сертификат тот же, что запомнен',
+  changed: 'сертификат сменился',
+};
+
+let sPiotSeen = ''; // отпечаток, который можно подтвердить
+
+function fRenderPiot(oStatus) {
+  $('piot-default').textContent = oStatus.defaultUrl;
+  $('piot-url').placeholder = oStatus.defaultUrl;
+  if (document.activeElement !== $('piot-url')) $('piot-url').value = oStatus.url;
+}
+
+function fRenderPiotCheck(oResult) {
+  const oInfo = oResult.info ?? {};
+  const oCert = oResult.certificate;
+  let sState;
+  if (oResult.ok) sState = `Модуль ${oInfo.tspiotId ?? 'без номера'} отвечает (${oResult.target})`;
+  else if (oResult.error) sState = oResult.error;
+  else sState = `Модуль ответил кодом ${oResult.httpStatus}`;
+  $('piot-state').textContent = sState;
+  $('piot-state').className = oResult.ok ? 'state' : 'state error';
+  const aRows = [];
+  if (oResult.ok) {
+    aRows.push(['Касса', oInfo.kktSerial ?? '—'], ['ИНН', oInfo.kktInn ?? '—'],
+      ['Локальный модуль «Честного знака»', oInfo.lm?.status ?? 'нет сведений']);
+  }
+  if (oCert) {
+    aRows.push(['Сертификат', O_PIOT_TRUST[oCert.trust] ?? oCert.trust], ['Отпечаток SHA-256', oCert.fingerprint]);
+    if (oCert.trust === 'changed' && oResult.fingerprint) aRows.push(['Был', oResult.fingerprint]);
+    if (oCert.validTo) aRows.push(['Действует до', new Date(oCert.validTo).toLocaleDateString()]);
+    if (oCert.names?.length) aRows.push(['Имена', oCert.names.join(', ')]);
+  }
+  $('piot-info').replaceChildren(...aRows.flatMap(([sLabel, sValue]) => {
+    const oDt = document.createElement('dt');
+    const oDd = document.createElement('dd');
+    oDt.textContent = sLabel;
+    oDd.textContent = sValue;
+    return [oDt, oDd];
+  }));
+  sPiotSeen = oCert?.trust === 'changed' ? oCert.fingerprint : '';
+  $('piot-trust-row').hidden = !sPiotSeen;
+  $('piot-result').hidden = false;
+}
+
+async function pLoadPiot() {
+  fRenderPiot(await pApi('GET', 'agentPiot'));
+}
+
+async function pSavePiot(oEvent) {
+  oEvent.preventDefault();
+  try {
+    fRenderPiot(await pApi('PUT', 'agentPiot', { url: $('piot-url').value.trim() }));
+    $('piot-result').hidden = true;
+    oNotify.success('Адрес модуля сохранён');
+  } catch (oError) {
+    oNotify.error(oError.message);
+  }
+}
+
+async function pCheckPiot(oButton) {
+  oButton.disabled = true;
+  try {
+    fRenderPiotCheck(await pApi('POST', 'agentPiot', { action: 'check' }));
+  } catch (oError) {
+    oNotify.error(oError.message);
+  } finally {
+    oButton.disabled = false;
+  }
+}
+
+async function pTrustPiot(oButton) {
+  if (!await pConfirm('Доверять новому сертификату модуля? Подтверждайте, только если модуль переустанавливали '
+    + 'или ему продлили сертификат: иначе коды маркировки могут уйти на чужой компьютер.', 'Доверять')) return;
+  oButton.disabled = true;
+  try {
+    await pApi('POST', 'agentPiot', { action: 'trust', fingerprint: sPiotSeen });
+    oNotify.success('Новый сертификат модуля запомнен');
+    await pCheckPiot($('piot-check'));
+  } catch (oError) {
+    oNotify.error(oError.message);
+  } finally {
+    oButton.disabled = false;
+  }
+}
+
 // ——— общие настройки ———
 
 async function pLoadSettings() {
@@ -669,7 +759,7 @@ async function pSaveSettings(oEvent) {
 
 // ——— вкладки ———
 
-const A_TABS = ['access', 'kkt', 'connect', 'update', 'settings'];
+const A_TABS = ['access', 'kkt', 'connect', 'piot', 'update', 'settings'];
 
 /** Показать вкладку; она же — в адресе (#connect), чтобы перезагрузка и ссылка открывали её. */
 function fShowTab(sTab, bFocus = false) {
@@ -742,6 +832,8 @@ async function pCopy(oCode) {
 function fInitKassaUrl() {
   $('kassa-url').textContent = sKassaUrl('');
   $('kassa-host').textContent = location.hostname;
+  $('piot-kassa-url').textContent = `${location.origin}/piot`;
+  $('piot-copy').addEventListener('click', () => pCopy($('piot-kassa-url')));
   $('copy-url').addEventListener('click', () => pCopy($('kassa-url')));
 }
 
@@ -766,13 +858,16 @@ async function pStart() {
   $('https-disable').addEventListener('click', (oEvent) => pHttpsAction('disable', oEvent.currentTarget));
   $('https-copy').addEventListener('click', () => pCopy($('https-url')));
   $('users-form').addEventListener('submit', pSaveUser);
+  $('piot-form').addEventListener('submit', pSavePiot);
+  $('piot-check').addEventListener('click', (oEvent) => pCheckPiot(oEvent.currentTarget));
+  $('piot-trust').addEventListener('click', (oEvent) => pTrustPiot(oEvent.currentTarget));
   $('notify').addEventListener('mouseenter', fNotifyPause);
   $('notify').addEventListener('mouseleave', () => { if (aNotifyQueue.length) fNotifyResume(); });
   $('restart-button').addEventListener('click', (oEvent) => pRestart(oEvent.currentTarget));
 
   try {
     oMapping = await pApi('GET', 'utils/mapping');
-    await Promise.all([pLoadServerInfo(), pRefreshDevices(), pLoadSettings(), pLoadHttps(), pLoadUpdate(), pLoadUsers()]);
+    await Promise.all([pLoadServerInfo(), pRefreshDevices(), pLoadSettings(), pLoadHttps(), pLoadUpdate(), pLoadUsers(), pLoadPiot()]);
   } catch (oError) {
     oNotify.error(oError.message);
   }

@@ -23,6 +23,12 @@
 // самообновление (update.js); POST /api/v2/agentRestart — перезапуск службой;
 // GET|POST|DELETE /api/v2/agentUsers — учётные записи сервера (users.js).
 //
+// ТС ПИоТ (piot.js): /piot/* — сквозной путь к модулю проверки кодов
+// маркировки (/piot/api/v3/codes/check → <модуль>/api/v3/codes/check), ответ
+// модуля — как есть, с его HTTP-кодом; GET|PUT|POST /api/v2/agentPiot — адрес
+// модуля, «Проверить связь» и подтверждение нового сертификата. Свои ошибки
+// (нет связи, сертификат сменился) — 502 в формате ошибок агента.
+//
 // Страница настроек — GET / (файлы в src/ui), на тех же запросах. Авторизация
 // у неё та же, что у API: браузер спросит логин и пароль, если учётки заведены.
 //
@@ -41,6 +47,7 @@ import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
 import { oGetSettings, oPutSettings } from './settings.js';
+import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
 
 const N_MAX_BODY = 1024 * 1024;
@@ -101,7 +108,7 @@ function fSendError(oRes, nStatus, sDescription) {
   fSend(oRes, nStatus, { error: { code: 505, description: sDescription } });
 }
 
-function pReadJson(oReq) {
+function pReadBody(oReq) {
   return new Promise((fResolve, fReject) => {
     const aChunks = [];
     let nSize = 0;
@@ -114,17 +121,19 @@ function pReadJson(oReq) {
       }
       aChunks.push(aChunk);
     });
-    oReq.on('end', () => {
-      const sText = Buffer.concat(aChunks).toString('utf8');
-      if (!sText.trim()) return fResolve({});
-      try {
-        fResolve(JSON.parse(sText));
-      } catch (oError) {
-        fReject(new AgentError(400, oError.message));
-      }
-    });
+    oReq.on('end', () => fResolve(Buffer.concat(aChunks)));
     oReq.on('error', fReject);
   });
+}
+
+async function pReadJson(oReq) {
+  const sText = (await pReadBody(oReq)).toString('utf8');
+  if (!sText.trim()) return {};
+  try {
+    return JSON.parse(sText);
+  } catch (oError) {
+    throw new AgentError(400, oError.message);
+  }
 }
 
 /**
@@ -254,6 +263,46 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
           throw new AgentError(409, oError.message);
         }
         return fSend(oRes, 200, oUpdater.oStatus());
+      }
+    }
+
+    // ТС ПИоТ (piot.js): сквозной путь к модулю и его настройка.
+    if (sPath === '/piot' || sPath.startsWith('/piot/')) {
+      const aBody = sMethod === 'GET' || sMethod === 'HEAD' ? undefined : await pReadBody(oReq);
+      // Касса бросила запрос (не дождалась) — не держать и запрос к модулю.
+      const oAbort = new AbortController();
+      oRes.on('close', () => { if (!oRes.writableFinished) oAbort.abort(); });
+      const nStart = Date.now();
+      const sTail = oUrl.pathname.slice('/piot'.length) || '/';
+      try {
+        const oAnswer = await pPiotForward({
+          sMethod,
+          sPath: sTail + oUrl.search,
+          aBody,
+          sContentType: oReq.headers['content-type'],
+          sAccept: oReq.headers.accept,
+          oSignal: oAbort.signal,
+          fLog,
+        });
+        // Коды маркировки в журнал не пишем — только путь и итог.
+        fLog(`ПИоТ: ${sMethod} ${sTail} → ${oAnswer.nStatus} (${Date.now() - nStart} мс)`);
+        oRes.writeHead(oAnswer.nStatus, oAnswer.sContentType ? { 'Content-Type': oAnswer.sContentType } : {});
+        return oRes.end(oAnswer.aBody);
+      } catch (oError) {
+        if (oError.name === 'AbortError') return undefined;
+        if (!(oError instanceof PiotError)) throw oError;
+        fLog(`ПИоТ: ${sMethod} ${sTail} — ${oError.message}`);
+        return fSendError(oRes, 502, oError.message);
+      }
+    }
+    if (sPath === '/api/v2/agentPiot') {
+      if (sMethod === 'GET') return fSend(oRes, 200, oPiotStatus());
+      if (sMethod === 'PUT') return fSend(oRes, 200, oPutPiot(await pReadJson(oReq)));
+      if (sMethod === 'POST') {
+        const oBody = await pReadJson(oReq);
+        if (oBody.action === 'check') return fSend(oRes, 200, await pPiotCheck({ fLog }));
+        if (oBody.action === 'trust') return fSend(oRes, 200, oTrustPiot(oBody));
+        throw new AgentError(400, "action: 'check' — проверить связь, 'trust' (с fingerprint) — доверять новому сертификату");
       }
     }
 

@@ -22,6 +22,7 @@
       <button type="button" role="tab" id="tab-access" data-tab="access">Доступ</button>
       <button type="button" role="tab" id="tab-kkt" data-tab="kkt">ККТ</button>
       <button type="button" role="tab" id="tab-connect" data-tab="connect">Подключение</button>
+      <button type="button" role="tab" id="tab-piot" data-tab="piot">Маркировка</button>
       <button type="button" role="tab" id="tab-update" data-tab="update">Обновление</button>
       <button type="button" role="tab" id="tab-settings" data-tab="settings">Общие</button>
     </nav>
@@ -63,6 +64,44 @@
       <p class="muted">С другого компьютера сети вместо <code id="kassa-host"></code> — адрес этого
         компьютера. Если на сервере заведены учётные записи, логин и пароль пишутся в адресе:
         <code>http://логин:пароль@…</code></p>
+    </section>
+
+    <section class="panel" data-pane="piot" role="tabpanel" aria-labelledby="tab-piot">
+      <h2>Модуль проверки кодов маркировки (ТС ПИоТ)</h2>
+      <p>Касса проверяет коды через этот сервер: из браузера к модулю напрямую не достучаться.
+        В кассе: <b>Кассы</b> → касса → <b>«Проверка кодов маркировки»</b>, адрес модуля:</p>
+      <div class="copy-row">
+        <code id="piot-kassa-url"></code>
+        <button type="button" id="piot-copy">Скопировать</button>
+      </div>
+      <p class="muted">Если касса подключена к ККТ через этот сервер («Атол Сервер»), там же есть кнопка
+        «Через сервер кассы» — она подставит адрес сама. Логин и пароль сервера пишутся в адресе, как у ККТ.</p>
+
+      <form id="piot-form" class="inline-form" autocomplete="off">
+        <label>Где работает модуль
+          <input name="url" id="piot-url" maxlength="256">
+        </label>
+        <button type="submit">Сохранить</button>
+        <button type="button" id="piot-check">Проверить связь</button>
+      </form>
+      <p class="muted">Пусто — модуль на этом компьютере: <code id="piot-default"></code>. Только по имени
+        компьютера: сертификат модуля выписан на имя, а не на адрес.</p>
+
+      <div id="piot-result" hidden>
+        <p class="state" id="piot-state"></p>
+        <dl class="cert" id="piot-info"></dl>
+        <div class="actions" id="piot-trust-row" hidden>
+          <button type="button" class="primary" id="piot-trust">Доверять новому сертификату</button>
+        </div>
+      </div>
+      <details>
+        <summary>Как сервер проверяет сертификат модуля</summary>
+        <p>Если сертификату модуля доверяет система (он подписан известным центром или установлен в
+          систему), сервер доверяет и ему. Иначе при первом подключении сервер запоминает отпечаток
+          сертификата и дальше принимает только его. Сменился сертификат — коды модулю не отправляются,
+          пока новый не подтвердят здесь: так коды не уйдут на чужой компьютер. Подтверждайте, только
+          если модуль переустанавливали или ему продлили сертификат.</p>
+      </details>
     </section>
 
     <section class="panel" data-pane="update" role="tabpanel" aria-labelledby="tab-update">
