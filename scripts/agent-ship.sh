@@ -6,10 +6,10 @@
 #   артефакт   zip, скачанный из Actions (agent-release → kktsite-agent-release);
 #              без аргумента — самый новый kktsite-agent-release*.zip в
 #              ~/Загрузки или ~/Downloads
-#   --ship     ssh-цель узла, как у scripts/release.sh в claude-test
+#   --ship     ssh-цель узла, как у scripts/release.sh в avb56/kktsite
 #   --dir      каталог стека на узле (по умолчанию /srv/kkt); агент ляжет в
 #              <dir>/static/agent. Корень dl.kktsite.ru (страница разделов) —
-#              не забота агента: она в claude-test, docs/deploy/dl/
+#              не забота агента: она в avb56/kktsite, docs/deploy/dl/
 #   --no-prune не убирать с узла прежние выпуски
 #   --dry-run  распаковать, подписать и проверить здесь, а команды для узла
 #              только напечатать
