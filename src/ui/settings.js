@@ -12,6 +12,10 @@ let oMapping = null;
 let aDevices = [];
 const mChecks = new Map(); // id → результат «Проверить связь»: переживает перерисовку списка
 const sBusy = new Set(); // id ККТ, по которым идёт запрос: кнопки неактивны
+const mModes = new Map(); // id Штриха-М → режим USB ({ usb, ppp, socks }) или { sError }
+const sSwitching = new Set(); // id ККТ, у которых меняется режим
+let aPorts = []; // COM-порты ПК с распознанными ККТ (agentPorts)
+const bCore = (vModel) => vModel === 'shtrih';
 
 async function pApi(sMethod, sPath, vBody) {
   let oRes;
@@ -120,13 +124,13 @@ function sConnectionSummary(oConn) {
   const aParts = [sDescribe('model', oConn.model)];
   switch (oConn.port) {
     case 'usb': aParts.push(oConn.usbDevice && oConn.usbDevice !== 'auto' ? `USB ${oConn.usbDevice}` : 'USB, автоматически'); break;
-    case 'com': aParts.push(`${oConn.com || 'COM ?'}, ${oConn.baudRate} бод`); break;
+    case 'com': aParts.push(bCore(oConn.model) ? (oConn.com || 'COM ?') : `${oConn.com || 'COM ?'}, ${oConn.baudRate} бод`); break;
     case 'tcp':
     case 'tcpip': aParts.push(`TCP/IP ${oConn.ipAddress || '?'}:${oConn.ipPort || 5555}`); break;
     case 'bluetooth': aParts.push(`Bluetooth ${oConn.mac || '?'}`); break;
     default: aParts.push(oConn.port);
   }
-  aParts.push(`ОФД: ${oConn.ofdChannel === 'none' ? 'нет' : 'через кассу'}`);
+  if (!bCore(oConn.model)) aParts.push(`ОФД: ${oConn.ofdChannel === 'none' ? 'нет' : 'через кассу'}`);
   return aParts.join(' · ');
 }
 
@@ -255,7 +259,16 @@ async function pRefreshDevices() {
     try {
       oDevice.oQueue = await pApi('GET', `getRequestsQueueStatus?deviceID=${encodeURIComponent(oDevice.id)}`);
     } catch { /* не критично — просто не покажем */ }
+    // Режим USB Штриха-М — один раз, потом после переключения: запрос идёт к ККТ.
+    if (bCore(oDevice.connectionSettings.model) && !mModes.has(oDevice.id) && !sSwitching.has(oDevice.id)) {
+      try {
+        mModes.set(oDevice.id, await pApi('GET', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`));
+      } catch (oError) {
+        mModes.set(oDevice.id, { sError: oError.message });
+      }
+    }
   }));
+  for (const oDevice of aDevices) if (!oDevice.isActive && !sSwitching.has(oDevice.id)) mModes.delete(oDevice.id);
   fRenderDevices();
 }
 
@@ -296,6 +309,31 @@ function fRenderDevices() {
 
     q('.kassa').textContent = sKassaUrl(oDevice.id);
 
+    // Штрих-М: режим USB и кнопка переключения.
+    const oModeButton = q('[data-act="mode"]');
+    // Пока режим меняется, ККТ на секунды «не подключена» (сервер открывает её заново) — строку не прячем.
+    if (bCore(oDevice.connectionSettings.model) && (oDevice.isActive || sSwitching.has(oDevice.id))) {
+      const oMode = mModes.get(oDevice.id);
+      q('.mode-row').hidden = false;
+      const bMarking = oMode && oMode.ppp === 3 && oMode.socks;
+      if (sSwitching.has(oDevice.id)) {
+        q('.mode').textContent = 'переключается…';
+        q('.mode-hint').textContent = 'ККТ может перезагрузиться — до минуты. Задания кассы подождут.';
+      } else if (!oMode) {
+        q('.mode').textContent = '…';
+      } else if (oMode.sError) {
+        q('.mode').textContent = `не прочитан: ${oMode.sError}`;
+      } else {
+        q('.mode').textContent = bMarking
+          ? 'для маркировки — ККТ ходит в ОФД и ОИСМ через этот компьютер (PPP, SOCKS)'
+          : oMode.ppp === 3 ? 'PPP без SOCKS — ККТ не выходит в сеть, переключите заново' : 'обычный (VCOM)';
+        q('.mode-hint').textContent = bMarking ? '' : 'Для проверки кодов маркировки ККТ нужен выход в сеть — режим для маркировки.';
+        oModeButton.hidden = false;
+        oModeButton.dataset.marking = bMarking ? '' : '1';
+        oModeButton.textContent = bMarking ? 'Вернуть обычный режим' : 'Перевести в режим для маркировки';
+      }
+    }
+
     const oCheck = mChecks.get(oDevice.id);
     if (oCheck) {
       q('.check').hidden = false;
@@ -319,6 +357,7 @@ async function pDeviceAction(sAct, oDevice, oButton) {
   if (sAct === 'copy') return pCopy(oButton.closest('.device').querySelector('.kassa'));
   if (sAct === 'edit') return fOpenDeviceDialog(oDevice);
   if (sAct === 'delete') return pDeleteDevice(oDevice);
+  if (sAct === 'mode') return pSwitchMode(oDevice, Boolean(oButton.dataset.marking));
 
   const sId = encodeURIComponent(oDevice.id);
   sBusy.add(oDevice.id);
@@ -339,6 +378,27 @@ async function pDeviceAction(sAct, oDevice, oButton) {
     if (sAct === 'check') mChecks.set(oDevice.id, oCheckView(null, oError.message));
     else oNotify.error(oError.message);
   } finally {
+    sBusy.delete(oDevice.id);
+    await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
+  }
+}
+
+async function pSwitchMode(oDevice, bMarking) {
+  const sText = bMarking
+    ? `Перевести «${oDevice.name}» в режим для маркировки? ККТ будет связываться с ОФД и ОИСМ через этот компьютер (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до минуты.`
+    : `Вернуть «${oDevice.name}» в обычный режим (USB VCOM)? Проверка кодов маркировки в ККТ работать перестанет: ей нужен выход в сеть.`;
+  if (!await pConfirm(sText, bMarking ? 'Перевести' : 'Вернуть')) return;
+  sSwitching.add(oDevice.id);
+  sBusy.add(oDevice.id);
+  mModes.delete(oDevice.id);
+  fRenderDevices();
+  try {
+    mModes.set(oDevice.id, await pApi('POST', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`, { marking: bMarking }));
+    oNotify.success(`${oDevice.name}: ${bMarking ? 'режим для маркировки' : 'обычный режим'}`);
+  } catch (oError) {
+    oNotify.error(oError.message);
+  } finally {
+    sSwitching.delete(oDevice.id);
     sBusy.delete(oDevice.id);
     await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
   }
@@ -419,9 +479,21 @@ function fFillSelect(oSelect, aItems, vCurrent) {
 
 function fShowPortFields() {
   const oForm = $('device-form');
-  let sPort = oForm.elements.port.value;
+  const oEl = oForm.elements;
+  // Штрих-М — только COM-порт; порт с ККТ — из найденных, если не выбран свой.
+  const bShtrih = bCore(oEl.model.value);
+  if (bShtrih) {
+    oEl.port.value = 'com';
+    const sFound = aPorts.find((o) => o.model === 'shtrih')?.key;
+    if (sFound && !aPorts.some((o) => o.key === oEl.com.value && o.model === 'shtrih')) oEl.com.value = sFound;
+  }
+  oEl.port.disabled = bShtrih;
+  for (const oItem of oForm.querySelectorAll('[data-core]')) oItem.hidden = (oItem.dataset.core === 'yes') !== bShtrih;
+  let sPort = oEl.port.value;
   if (sPort === 'tcpip') sPort = 'tcp';
   for (const oLabel of oForm.querySelectorAll('[data-port]')) oLabel.hidden = oLabel.dataset.port !== sPort;
+  // Скорость у USB VCOM ни на что не влияет — у Штриха на найденном USB-порту не спрашиваем.
+  if (bShtrih && aPorts.some((o) => o.key === oEl.com.value && o.model === 'shtrih')) oEl.baudRate.closest('label').hidden = true;
 }
 
 async function fOpenDeviceDialog(oDevice) {
@@ -447,7 +519,9 @@ async function fOpenDeviceDialog(oDevice) {
   fFillSelect(oForm.elements.usbDevice, oMapping.usbDevice, oConn.usbDevice || 'auto');
   fFillSelect(oForm.elements.baudRate, oMapping.baudRate, oConn.baudRate);
   fFillSelect(oForm.elements.ofdChannel, oMapping.ofdChannel, oConn.ofdChannel || 'auto');
-  $('com-list').replaceChildren(...oMapping.com.map((o) => new Option(o.description, o.key)));
+  // Порты — найденные на ПК (с подписью, что за ККТ); не вышло — из mapping.
+  aPorts = await pApi('GET', 'agentPorts').catch(() => []);
+  $('com-list').replaceChildren(...(aPorts.length ? aPorts : oMapping.com).map((o) => new Option(o.description, o.key)));
   oForm.elements.com.value = oConn.com ?? '';
   oForm.elements.ipAddress.value = oConn.ipAddress || '';
   oForm.elements.ipPort.value = oConn.ipPort || '';
@@ -468,7 +542,8 @@ function oConnectionFromForm() {
   const sPort = oEl.port.value;
   const oConn = {
     ...(oEditing?.connectionSettings || {}),
-    model: Number(oEl.model.value),
+    // Модели Атола — числа (как у Web Requests), Штрих-М — 'shtrih'.
+    model: /^\d+$/.test(oEl.model.value) ? Number(oEl.model.value) : oEl.model.value,
     port: sPort,
     ofdChannel: oEl.ofdChannel.value,
     accessPassword: oEl.accessPassword.value,
@@ -733,6 +808,7 @@ async function pLoadSettings() {
   $('settings-form').elements.deleteRequestsAfter.value = oSettings.deleteRequestsAfter;
   $('settings-form').elements.blockQueueOnPrintErrors.checked = oSettings.blockQueueOnPrintErrors;
   $('settings-form').elements.cancelWaitingRequestsAfter.value = oSettings.cancelWaitingRequestsAfter;
+  $('settings-form').elements.vendorData.checked = oSettings.vendorData !== false;
 }
 
 async function pSaveSettings(oEvent) {
@@ -750,6 +826,7 @@ async function pSaveSettings(oEvent) {
       deleteRequestsAfter: Number(oInput.value),
       blockQueueOnPrintErrors: oEl.blockQueueOnPrintErrors.checked,
       cancelWaitingRequestsAfter: Number(oEl.cancelWaitingRequestsAfter.value),
+      vendorData: oEl.vendorData.checked,
     });
     oNotify.success('Настройки сохранены');
   } catch (oError) {
@@ -843,6 +920,8 @@ async function pStart() {
   $('add-device').addEventListener('click', () => fOpenDeviceDialog(null).catch((oError) => oNotify.error(oError.message)));
   $('device-form').addEventListener('submit', pSaveDevice);
   $('device-form').elements.port.addEventListener('change', fShowPortFields);
+  $('device-form').elements.model.addEventListener('change', fShowPortFields);
+  $('device-form').elements.com.addEventListener('change', fShowPortFields);
   $('device-cancel').addEventListener('click', () => $('device-dialog').close());
   $('settings-form').addEventListener('submit', pSaveSettings);
   $('update-check').addEventListener('click', (oEvent) => pUpdateAction({ action: 'check' }, oEvent.currentTarget));

@@ -121,6 +121,28 @@ export function oPutPolicyAccess({ license, policyUrl } = {}) {
   return { license: oNext.license ? '…' + oNext.license.slice(-4) : '', policyUrl: oNext.policyUrl };
 }
 
+// Известные ККТ по USB VID:PID (hex, как отдаёт serialport).
+const O_KNOWN_PORTS = {
+  '1fc9:0083': { model: 'shtrih', description: 'Штрих-М (Посцентр, USB VCOM)' },
+  '0483:5740': { model: 'viki', description: 'Вики Принт (USB VCOM)' },
+  '2912:0005': { model: 'atol', description: 'Атол (USB) — подключайте как USB, не COM' },
+};
+
+/**
+ * COM-порты ПК: [{ key, path, description, model }]. key — значение настройки
+ * com: на Windows номер (как у Web Requests), иначе путь; model — что за ККТ
+ * по VID:PID (shtrih, viki, atol) или ''.
+ */
+export async function pPortList() {
+  const aPorts = await aListSerialPorts().catch(() => []);
+  return aPorts.map((o) => {
+    const oKnown = O_KNOWN_PORTS[`${String(o.vendorId || '').toLowerCase()}:${String(o.productId || '').toLowerCase()}`];
+    const sKey = process.platform === 'win32' && /^COM\d+$/i.test(o.path) ? o.path.slice(3) : o.path;
+    const sMaker = [o.manufacturer, o.serialNumber].filter(Boolean).join(', ');
+    return { key: sKey, path: o.path, model: oKnown?.model || '', description: `${o.path} — ${oKnown?.description || sMaker || 'COM-порт'}` };
+  });
+}
+
 /** COM-порт по настройке: на Windows — номер (как у Web Requests), иначе путь. */
 const sPortPath = (vCom) => (process.platform === 'win32' && /^\d+$/.test(String(vCom)) ? `COM${vCom}` : String(vCom ?? ''));
 

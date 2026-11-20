@@ -117,6 +117,8 @@ button.danger, button.danger-text { background: var(--err); border-color: var(--
 }
 .summary, .state, .device .error { margin-left: 20px; }
 .device .kassa-row { margin: 4px 0 0 20px; }
+.device .mode-row { margin: 8px 0 0 20px; }
+.device .mode-row p { margin: 0; }
 .kassa-row code { font-size: 13px; }
 .check {
   margin: 6px 0 0 20px;
@@ -262,3 +264,4 @@ summary { cursor: pointer; color: var(--muted); }
 .users { list-style: none; padding: 0; margin: 8px 0; }
 .users li { padding: 4px 0; display: flex; align-items: center; gap: 8px; }
 .alert button { margin-left: 8px; }
+.grid .wide { grid-column: 1 / -1; margin: 0; }

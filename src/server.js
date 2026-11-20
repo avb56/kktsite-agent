@@ -46,7 +46,7 @@ import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
-import { oPolicyAccess, oPutPolicyAccess } from './core.js';
+import { oPolicyAccess, oPutPolicyAccess, pPortList } from './core.js';
 import { oGetSettings, oPutSettings } from './settings.js';
 import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
@@ -322,6 +322,16 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
           throw new AgentError(400, oError.message);
         }
       }
+    }
+
+    // COM-порты ПК с распознанными ККТ (страница: выбор порта Штриха-М).
+    if (sPath === '/api/v2/agentPorts' && sMethod === 'GET') return fSend(oRes, 200, await pPortList());
+    // Режим USB Штриха-М: GET — какой сейчас; POST { marking: true|false } —
+    // переключить (до минуты: ККТ может перезагрузиться).
+    if (sPath === '/api/v2/agentShtrihMode') {
+      const oDevice = oRegistry.oGet(sDeviceId);
+      if (sMethod === 'GET') return fSend(oRes, 200, await oDevice.pShtrihMode(false));
+      if (sMethod === 'POST') return fSend(oRes, 200, await oDevice.pShtrihMode(true, Boolean((await pReadJson(oReq)).marking)));
     }
 
     if (sPath === '/api/v2/settings') {

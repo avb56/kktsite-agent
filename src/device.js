@@ -349,6 +349,60 @@ export class Device {
     });
   }
 
+  /**
+   * Штрих-М (Посцентр): режим USB — обычный (VCOM, протокол Штриха) или для
+   * маркировки (PPP «клиент через USB» + SOCKS5: ККТ сама ходит в ОФД, ОИСМ и
+   * ОКП через агента). Поле PPP ККТ применяет сразу — порт тут же говорит
+   * другим протоколом, поэтому после записи ККТ открывается заново; SOCKS —
+   * после перезагрузки: её агент делает сам, уже по новой связи (FE F3).
+   * Ответ — режим после переключения ({ usb, ppp, socks }).
+   */
+  pShtrihMode(bSet, bMarking) {
+    if (!bCoreModel(this.connectionSettings.model)) throw new AgentError(400, 'Режим USB — только у Штриха-М');
+    if (!this.oHandle) throw new AgentError(409, `ККТ [${this.id}] не подключена`);
+    return this.pSerial(async () => {
+      const pGet = async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {};
+      const oMode = await pGet();
+      if (!bSet) return oMode;
+      if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты (RNDIS) — переключите её в VCOM сервисной программой Посцентра');
+      if (bMarking ? oMode.ppp === 3 && oMode.socks : oMode.ppp === 0) return oMode;
+      const bReboot = bMarking && !oMode.socks;
+      await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: bMarking ? { socks: true, ppp: 3 } : { socks: false, ppp: 0 } });
+      this.fLog?.(`ККТ [${this.id}] ${this.name}: режим USB — ${bMarking ? 'для маркировки (PPP, SOCKS)' : 'обычный (VCOM)'}`);
+      // Порт говорит новым протоколом не сразу (стенд: обычный — через пару секунд).
+      await this.pReopenHandle(4000, 30e3);
+      if (bReboot) {
+        // SOCKS ККТ читает при загрузке.
+        await this.oHandle.pProcess({ type: 'rebootDevice' }).catch(() => {});
+        this.fLog?.(`ККТ [${this.id}] ${this.name}: перезагрузка — включить SOCKS`);
+        await this.pReopenHandle(10e3, 60e3);
+      }
+      return pGet();
+    });
+  }
+
+  /** Закрыть ККТ и открыть снова: подождать nWaitMs, пробовать до nTotalMs. */
+  async pReopenHandle(nWaitMs, nTotalMs) {
+    try { this.oHandle?.fClose(); } catch { /* уже закрыт */ }
+    this.oHandle = null;
+    const nUntil = Date.now() + nTotalMs;
+    await new Promise((f) => setTimeout(f, nWaitMs));
+    for (;;) {
+      try {
+        this.oHandle = await this.pOpenHandle();
+        this.bReopen = false;
+        return;
+      } catch (oError) {
+        if (Date.now() > nUntil) {
+          this.sLastError = oTaskError(oError).description;
+          this.fScheduleReconnect();
+          throw new AgentError(409, `ККТ [${this.id}] не ответила после смены режима: ${this.sLastError}`);
+        }
+        await new Promise((f) => setTimeout(f, 2000));
+      }
+    }
+  }
+
   /** Выполнять задания, пока есть ждущие, ККТ подключена и очередь не стоит. */
   fPump() {
     if (this.bPumping || !this.oHandle || this.oBlock || !this.aWaiting.length) return;

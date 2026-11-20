@@ -187,6 +187,12 @@
         <p class="muted">Касса через 40 секунд спрашивает кассира, ждать ли дальше. Задание, которое она
           бросила, иначе пробилось бы, когда ККТ включат, — хоть через дни, а кассир к тому времени пробил
           чек заново. Начатое задание не отменяется. 0 — не отменять, как у Web Requests.</p>
+        <label class="check-label">
+          <input type="checkbox" name="vendorData"> Передавать служебные данные производителю ККТ
+        </label>
+        <p class="muted">Штрих-М Посцентра отправляет производителю состояние и заводской номер ККТ — в
+          именах серверов *.kktlab.ru, когда ищет адрес ОФД. Без галочки сервер такие имена не пропускает, и
+          ККТ идёт в ОФД по обычному адресу.</p>
         <button type="submit">Сохранить</button>
       </form>
     </section>
@@ -222,10 +228,15 @@
         <code class="kassa"></code>
         <button type="button" data-act="copy">Скопировать</button>
       </div>
+      <div class="mode-row" hidden>
+        <p><span class="muted">Режим ККТ:</span> <span class="mode"></span></p>
+        <p class="muted mode-hint"></p>
+      </div>
       <div class="check" hidden></div>
       <div class="actions">
         <button type="button" data-act="toggle"></button>
         <button type="button" data-act="check">Проверить связь</button>
+        <button type="button" data-act="mode" hidden></button>
         <button type="button" data-act="default">Сделать по умолчанию</button>
         <button type="button" data-act="edit">Настроить</button>
         <button type="button" data-act="delete" class="danger-text">Удалить</button>
@@ -271,12 +282,15 @@
           <input name="mac" pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" placeholder="00:11:22:33:44:55">
         </label>
 
-        <label>Обмен с ОФД через кассу
+        <label data-core="no">Обмен с ОФД через кассу
           <select name="ofdChannel"></select>
         </label>
+        <p class="muted wide" data-core="yes" hidden>Штрих-М сервер ведёт сам, без драйверов Посцентра.
+          Порт с ККТ подставлен из найденных. Для маркировки после подключения — кнопка «Перевести в режим
+          для маркировки»: ККТ сама пойдёт в ОФД и ОИСМ через этот компьютер.</p>
       </div>
 
-      <details>
+      <details data-core="no">
         <summary>Пароли протокола ККТ</summary>
         <p class="muted">Это не логин к серверу — учётные записи сервера на вкладке «Доступ». Эти пароли
           передаются драйверу Атола при подключении к ККТ, как в «АТОЛ. Web Requests» («Пароль доступа»,
