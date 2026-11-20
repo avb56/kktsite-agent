@@ -34,7 +34,7 @@ import { sNodeFile, sPlatformKey } from '../src/layout.js';
 import { pPackTarGz } from '../src/tar.js';
 
 const S_AGENT = fileURLToPath(new URL('..', import.meta.url));
-// Отсюда же — страница загрузки (claude-test: docs/deploy/nginx-dl.conf). Агент запоминает
+// Отсюда же — страница загрузки (avb56/kktsite: docs/deploy/nginx-dl.conf). Агент запоминает
 // адрес при сборке: сменили — уже установленные ходят на прежний.
 const S_DEFAULT_UPDATE_URL = 'https://dl.kktsite.ru/agent/';
 
