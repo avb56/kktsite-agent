@@ -49,6 +49,14 @@
         <h2>ККТ</h2>
         <button type="button" class="primary" id="add-device">Добавить ККТ</button>
       </div>
+      <div class="alert warn" id="rndis-box" hidden>
+        <p><b>Найдена ККТ Штрих-М в режиме сетевой карты USB (RNDIS).</b> Так её с компьютером не связать:
+          нужен USB-COM. Сервер переведёт её сам — ККТ перезагрузится и появится COM-портом.</p>
+        <p class="muted" id="rndis-list"></p>
+        <progress id="rndis-progress" max="1" value="0" hidden></progress>
+        <p class="muted" id="rndis-hint" hidden></p>
+        <button type="button" class="primary" id="rndis-button">Перевести в USB-COM</button>
+      </div>
       <p class="muted" id="devices-empty" hidden>ККТ пока нет. Добавьте ККТ, с которой будет работать касса.</p>
       <ul class="devices" id="devices"></ul>
     </section>

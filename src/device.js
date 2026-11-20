@@ -374,17 +374,43 @@ export class Device {
   async pSwitchShtrih(bMarking) {
     const pGet = async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {};
     const oMode = await pGet();
-    if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты (RNDIS) — переключите её в VCOM сервисной программой Посцентра');
+    if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты USB (RNDIS) — переведите её в USB-COM кнопкой вверху страницы');
     if (bMarking ? oMode.ppp === 3 && oMode.socks : oMode.ppp === 0) return oMode;
-    const bReboot = bMarking && !oMode.socks;
-    await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: bMarking ? { socks: true, ppp: 3 } : { socks: false, ppp: 0 } });
-    this.fLog?.(`ККТ [${this.id}] ${this.name}: связь — ${bMarking ? 'через этот компьютер (USB PPP, SOCKS)' : 'только USB (VCOM), без сети'}`);
-    // Порт говорит новым протоколом не сразу (стенд: обычный — через пару секунд).
-    await this.pReopenHandle(4000, 30e3);
-    if (bReboot) {
-      // SOCKS ККТ читает при загрузке.
+    const fSay = (s) => this.fLog?.(`ККТ [${this.id}] ${this.name}: ${s}`);
+
+    if (!bMarking) {
+      await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: false, ppp: 0 } });
+      fSay('связь — только USB (VCOM), без сети');
+      // Порт говорит новым протоколом не сразу (стенд: обычный — через пару секунд).
+      await this.pReopenHandle(4000, 30e3);
+      return pGet();
+    }
+
+    // Включить PPP. Задача PPP прошивки стартует только при загрузке: у ККТ,
+    // загруженной с PPP, поле действует сразу, у загруженной без него — порт
+    // молчит до перезагрузки, а перезагрузить командой уже нельзя (порт не
+    // говорит ни так, ни так; стенд, 20.11.2026). Поэтому — сторожевой таймер
+    // интерфейса на 1 минуту: ККТ, не дождавшись обмена, перезагрузится сама
+    // и поднимется с PPP. Потом таймер — как был.
+    const bWasPpp = oMode.ppp === 3;
+    const nWatchdog = oMode.watchdog ?? 0;
+    await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: bWasPpp ? { socks: true } : { watchdog: 1, socks: true, ppp: 3 } });
+    fSay('связь — через этот компьютер (USB PPP, SOCKS)');
+    let bRebooted = false;
+    if (!bWasPpp) {
+      try {
+        await this.pReopenHandle(4000, 15e3);
+      } catch {
+        fSay('ждёт перезагрузки по сторожевому таймеру (до двух минут)');
+        await this.pReopenHandle(0, 150e3);
+        bRebooted = true;
+      }
+      if (nWatchdog !== 1) await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: { watchdog: nWatchdog } });
+    }
+    // SOCKS ККТ читает при загрузке: не было его до неё — перезагрузить (по PPP можно).
+    if (!oMode.socks && !bRebooted) {
       await this.oHandle.pProcess({ type: 'rebootDevice' }).catch(() => {});
-      this.fLog?.(`ККТ [${this.id}] ${this.name}: перезагрузка — включить SOCKS`);
+      fSay('перезагрузка — включить SOCKS');
       await this.pReopenHandle(10e3, 60e3);
     }
     return pGet();

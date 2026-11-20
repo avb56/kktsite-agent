@@ -267,3 +267,7 @@ summary { cursor: pointer; color: var(--muted); }
 .users li { padding: 4px 0; display: flex; align-items: center; gap: 8px; }
 .alert button { margin-left: 8px; }
 .grid .wide { grid-column: 1 / -1; margin: 0; }
+#rndis-box p { margin: 0 0 6px; }
+#rndis-box button { margin-left: 0; }
+#rndis-progress { display: block; width: 100%; max-width: 420px; height: 8px; margin: 6px 0; }
+#rndis-progress[hidden] { display: none; }

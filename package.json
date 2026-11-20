@@ -17,12 +17,14 @@
   },
   "dependencies": {
     "@serialport/bindings-cpp": "10.8.0",
-    "kkt-core": "https://github.com/avb56/kkt-core-dist/releases/download/v0.2.55/kkt-core-0.2.55.tgz",
-    "node-atol-wrapper": "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0"
+    "kkt-core": "https://github.com/avb56/kkt-core-dist/releases/download/v0.2.56/kkt-core-0.2.56.tgz",
+    "node-atol-wrapper": "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0",
+    "usb": "2.9.0"
   },
   "allowScripts": {
     "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0": true,
-    "@serialport/bindings-cpp@10.8.0": true
+    "@serialport/bindings-cpp@10.8.0": true,
+    "usb@2.9.0": true
   },
   "devDependencies": {
     "esbuild": "0.28.2"

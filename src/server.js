@@ -46,7 +46,7 @@ import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
-import { oPolicyAccess, oPutPolicyAccess, pPortList } from './core.js';
+import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindRndis, pRndisToCom } from './core.js';
 import { oGetSettings, oPutSettings } from './settings.js';
 import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
@@ -326,6 +326,22 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
 
     // COM-порты ПК с распознанными ККТ (страница: выбор порта Штриха-М).
     if (sPath === '/api/v2/agentPorts' && sMethod === 'GET') return fSend(oRes, 200, await pPortList());
+    // Штрих-М в режиме сетевой карты USB (RNDIS): GET — найденные; POST { id } —
+    // перевести в USB-COM (VCOM) и перезагрузить (core.js).
+    if (sPath === '/api/v2/agentRndis') {
+      const aFound = await pFindRndis();
+      if (sMethod === 'GET') return fSend(oRes, 200, aFound.map(({ id, description }) => ({ id, description })));
+      if (sMethod === 'POST') {
+        const sId = (await pReadJson(oReq)).id;
+        const oFound = aFound.find((o) => !sId || o.id === sId);
+        if (!oFound) throw new AgentError(404, 'ККТ в режиме сетевой карты не найдена');
+        try {
+          return fSend(oRes, 200, await pRndisToCom(oFound));
+        } catch (oError) {
+          throw new AgentError(409, `Не перевести в USB-COM: ${oError.message}`);
+        }
+      }
+    }
     // Режим USB Штриха-М: GET — какой сейчас; POST { marking: true|false } —
     // переключить (до минуты: ККТ может перезагрузиться).
     if (sPath === '/api/v2/agentShtrihMode') {

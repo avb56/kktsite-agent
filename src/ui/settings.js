@@ -333,8 +333,8 @@ function fRenderDevices() {
         q('.mode').textContent = `не прочитана: ${oMode.sError}`;
       } else {
         q('.mode').textContent = bNet
-          ? 'с ОФД и ОИСМ — через этот компьютер'
-          : oMode.ppp === 3 ? 'через компьютер, но не включена до конца — включите заново' : 'только USB, без выхода в сеть';
+          ? 'с ОФД и ОИСМ — через этот компьютер (USB PPP)'
+          : oMode.ppp === 3 ? 'через компьютер (USB PPP), но не включена до конца — включите заново' : 'только USB (VCOM), без выхода в сеть';
         q('.mode-hint').textContent = bNet ? ''
           : 'Документы не уходят в ОФД, коды маркировки не проверяются онлайн: своей сети у ККТ по USB нет.';
         oModeButton.hidden = false;
@@ -400,7 +400,7 @@ function fUpdateProgress(oItem, sId) {
   if (!o) return;
   const nSec = (Date.now() - o.nAt) / 1000;
   oItem.querySelector('.mode-progress').value = Math.min(0.95, nSec / o.nSec);
-  oItem.querySelector('.mode-hint').textContent = `${Math.round(nSec)} с. ККТ может перезагрузиться — до минуты. Задания кассы подождут.`;
+  oItem.querySelector('.mode-hint').textContent = `${Math.round(nSec)} с. ККТ может перезагрузиться — до двух минут. Задания кассы подождут.`;
 }
 setInterval(() => {
   for (const sId of sSwitching) {
@@ -409,20 +409,65 @@ setInterval(() => {
   }
 }, 500);
 
+// ——— Штрих-М в режиме сетевой карты USB (RNDIS) ———
+let aRndis = [];
+let nRndisAt = 0; // начало перевода; 0 — не идёт
+
+async function pLoadRndis() {
+  if (nRndisAt) return;
+  aRndis = await pApi('GET', 'agentRndis').catch(() => []);
+  $('rndis-box').hidden = !aRndis.length;
+  $('rndis-list').textContent = aRndis.map((o) => o.description).join('; ');
+}
+
+async function pRndisToCom() {
+  if (!aRndis.length) return;
+  nRndisAt = Date.now();
+  $('rndis-button').disabled = true;
+  $('rndis-progress').hidden = false;
+  $('rndis-hint').hidden = false;
+  const nTimer = setInterval(() => {
+    const nSec = (Date.now() - nRndisAt) / 1000;
+    $('rndis-progress').value = Math.min(0.95, nSec / 25);
+    $('rndis-hint').textContent = `${Math.round(nSec)} с. Связь с ККТ по USB, запись режима, перезагрузка.`;
+  }, 500);
+  try {
+    const oDone = await pApi('POST', 'agentRndis', { id: aRndis[0].id });
+    // Перезагрузка ККТ — ~15 с; дождаться, что COM-порт появился.
+    for (let n = 0; n < 30; n += 1) {
+      await new Promise((f) => setTimeout(f, 1000));
+      const aPorts = await pApi('GET', 'agentPorts').catch(() => []);
+      if (aPorts.some((o) => o.model === 'shtrih')) break;
+    }
+    oNotify.success(`${oDone.name || 'ККТ'}: теперь USB-COM. Если её нет в списке — добавьте (модель «Штрих-М»); если есть — подключите и включите связь через компьютер.`);
+  } catch (oError) {
+    oNotify.error(oError.message);
+  } finally {
+    clearInterval(nTimer);
+    nRndisAt = 0;
+    $('rndis-button').disabled = false;
+    $('rndis-progress').hidden = true;
+    $('rndis-hint').hidden = true;
+    await pLoadRndis();
+    await pRefreshDevices().catch(() => {});
+  }
+}
+
 async function pSwitchMode(oDevice, bMarking) {
   const oMode = mModes.get(oDevice.id);
   const sText = bMarking
-    ? `Включить для «${oDevice.name}» связь через этот компьютер? ККТ сама будет отправлять документы в ОФД и проверять коды маркировки в ОИСМ — через сеть компьютера (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до минуты.`
-    : `Отключить для «${oDevice.name}» связь через компьютер? ККТ останется только на USB: документы перестанут уходить в ОФД, коды маркировки — проверяться онлайн.`;
+    ? `Включить для «${oDevice.name}» связь через этот компьютер? ККТ сама будет отправлять документы в ОФД и проверять коды маркировки в ОИСМ — через сеть компьютера (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до двух минут.`
+    : `Отключить для «${oDevice.name}» связь через компьютер? ККТ останется только на USB (VCOM): документы перестанут уходить в ОФД, коды маркировки — проверяться онлайн.`;
   if (!await pConfirm(sText, bMarking ? 'Включить' : 'Отключить')) return;
-  mSwitchStart.set(oDevice.id, { nAt: Date.now(), nSec: bMarking && !oMode?.socks ? 30 : 20 });
+  // Ожидаемая длительность: из «только USB» — до перезагрузки по таймеру (~90 с).
+  mSwitchStart.set(oDevice.id, { nAt: Date.now(), nSec: !bMarking ? 10 : oMode?.ppp !== 3 ? 90 : !oMode?.socks ? 30 : 10 });
   sSwitching.add(oDevice.id);
   sBusy.add(oDevice.id);
   mModes.delete(oDevice.id);
   fRenderDevices();
   try {
     mModes.set(oDevice.id, await pApi('POST', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`, { marking: bMarking }));
-    oNotify.success(`${oDevice.name}: ${bMarking ? 'связь с ОФД и ОИСМ — через этот компьютер' : 'только USB, без выхода в сеть'}`);
+    oNotify.success(`${oDevice.name}: ${bMarking ? 'связь с ОФД и ОИСМ — через этот компьютер (USB PPP)' : 'только USB (VCOM), без выхода в сеть'}`);
   } catch (oError) {
     oNotify.error(oError.message);
   } finally {
@@ -953,6 +998,10 @@ async function pStart() {
   $('device-form').addEventListener('submit', pSaveDevice);
   $('device-form').elements.port.addEventListener('change', fShowPortFields);
   $('device-form').elements.model.addEventListener('change', fShowPortFields);
+  $('rndis-button').addEventListener('click', pRndisToCom);
+  // ККТ в RNDIS — при открытии и раз в 15 с (на Windows поиск — PowerShell).
+  pLoadRndis();
+  setInterval(() => { if (!document.hidden) pLoadRndis(); }, 15e3);
   $('device-form').elements.com.addEventListener('change', fShowPortFields);
   $('device-cancel').addEventListener('click', () => $('device-dialog').close());
   $('settings-form').addEventListener('submit', pSaveSettings);

@@ -10,7 +10,8 @@
 //     работает от обычного пользователя (User=; по умолчанию — тот, кто вызвал
 //     sudo). Не от root: пакет Атола ставит библиотеки драйвера с правами 666,
 //     и root-процесс загрузил бы подменённую библиотеку. Доступ к ККТ по USB
-//     даёт правило udev Атола, к COM-портам — группа dialout. Журнал —
+//     даёт правило udev Атола, к Штриху-М в режиме RNDIS — своё
+//     (91-kktsite-agent.rules), к COM-портам — группа dialout. Журнал —
 //     journalctl -u kktsite-agent;
 //   — Windows: задача планировщика «при запуске системы» от SYSTEM, запускает
 //     run.cmd из %ProgramData%\kktsite-agent (там же данные агента) — он
@@ -174,6 +175,21 @@ function oTargetUser(oArgs) {
   return { sUser, sHome };
 }
 
+// Штрих-М (Посцентр) в режиме сетевой карты USB (RNDIS, 18d1:4ee4, NXP):
+// агент переводит его в USB-COM сам, по USB (core.js, pRndisToCom) — без
+// root, но с доступом к устройству. Телефоны в режиме модема (тот же код
+// Google) не трогаем: только производитель NXP.
+const S_UDEV_PATH = '/etc/udev/rules.d/91-kktsite-agent.rules';
+const S_UDEV_RULES = '# kktsite-agent: Штрих-М в режиме RNDIS — доступ агенту (src/service.js)\n'
+  + 'SUBSYSTEM=="usb", ATTRS{idVendor}=="18d1", ATTRS{idProduct}=="4ee4", ATTRS{manufacturer}=="NXP", MODE="0666"\n';
+
+function fUdevReload() {
+  try {
+    sRun('udevadm', ['control', '--reload'], true);
+    sRun('udevadm', ['trigger', '--subsystem-match=usb', '--action=add'], true);
+  } catch { /* без udev (контейнер) — правило подхватится при следующем подключении */ }
+}
+
 function oLinux() {
   return {
     pInstall(oArgs, { sNode = S_NODE, sMain = S_MAIN } = {}) {
@@ -181,6 +197,8 @@ function oLinux() {
       const { sUser, sHome } = oTargetUser(oArgs);
       const sDataDir = join(sHome, '.config', S_SERVICE);
       writeFileSync(S_UNIT_PATH, sSystemdUnit({ sUser, sNode, sMain, oEnv: oServiceEnv(oArgs), sDataDir }));
+      writeFileSync(S_UDEV_PATH, S_UDEV_RULES, { mode: 0o644 });
+      fUdevReload();
       sRun('systemctl', ['daemon-reload']);
       sRun('systemctl', ['enable', S_SERVICE], true);
       // restart, а не start: при повторном install подхватить новые настройки.
@@ -193,6 +211,7 @@ function oLinux() {
       if (!existsSync(S_UNIT_PATH)) return `Служба ${S_SERVICE} не установлена.`;
       try { sRun('systemctl', ['disable', '--now', S_SERVICE], true); } catch { /* уже остановлена */ }
       rmSync(S_UNIT_PATH);
+      if (existsSync(S_UDEV_PATH)) { rmSync(S_UDEV_PATH); fUdevReload(); }
       sRun('systemctl', ['daemon-reload']);
       return `Служба ${S_SERVICE} остановлена и удалена. Данные агента (список ККТ, учётки) не тронуты.`;
     },

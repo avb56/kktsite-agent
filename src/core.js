@@ -20,6 +20,7 @@
 //   — служебные данные производителю ККТ — настройка vendorData (settings.js).
 
 import net from 'node:net';
+import { execFile } from 'node:child_process';
 import dns from 'node:dns';
 import { createRequire } from 'node:module';
 import { vReadJson, fWriteJson } from './store.js';
@@ -141,6 +142,115 @@ export async function pPortList() {
     const sMaker = [o.manufacturer, o.serialNumber].filter(Boolean).join(', ');
     return { key: sKey, path: o.path, model: oKnown?.model || '', description: `${o.path} — ${oKnown?.description || sMaker || 'COM-порт'}` };
   });
+}
+
+// ——— Штрих-М в режиме сетевой карты USB (RNDIS) → USB-COM ———
+//
+// По руководству Посцентра RNDIS (таблица 21 поле 9 = 1) у Ритейла-02Ф — из
+// коробки. Через COM-порт такую ККТ не видно; агент переводит её в VCOM сам:
+//   — Linux: USB-устройство 18d1:4ee4 (NXP «RNDIS») — напрямую, пакетом usb с
+//     API WebUSB, и свой стек RNDIS kkt-core, как у кассы в браузере. Сетевой
+//     драйвер ядра отцепляем; root не нужен — только доступ к устройству (udev);
+//   — Windows: сетевую карту ставит сама ОС (её драйвер RNDIS, забрать USB
+//     нельзя). Служба — от SYSTEM: даёт карте адрес 192.168.137.1 (шлюз ККТ по
+//     умолчанию) и идёт к ККТ по TCP 192.168.137.111:7778.
+// Дальше одинаково: SOCKS (таблица 16 поле 19 = 1), USB — VCOM (поле 9 = 0),
+// перезагрузка. После неё ККТ — COM-порт 1fc9:0083, связь через компьютер
+// (PPP) включается уже без перезагрузки.
+const N_RNDIS_VID = 0x18D1, N_RNDIS_PID = 0x4EE4;
+const A_RNDIS_HOST = '192.168.137.1', A_RNDIS_KKT = '192.168.137.111';
+
+const pExec = (sCmd, aArgs, nTimeoutMs = 15e3) => new Promise((fResolve, fReject) =>
+  execFile(sCmd, aArgs, { timeout: nTimeoutMs, windowsHide: true }, (oError, sOut, sErr) =>
+    (oError ? fReject(new Error(String(sErr || oError.message).trim())) : fResolve(String(sOut)))));
+
+let oWebUsb = null;
+function oUsbApi() {
+  if (!oWebUsb) {
+    const { WebUSB } = require('usb');
+    oWebUsb = new WebUSB({ allowAllDevices: true });
+  }
+  return oWebUsb;
+}
+const bRndisUsb = (o) => o?.vendorId === N_RNDIS_VID && o.productId === N_RNDIS_PID
+  && o.productName?.trim() === 'RNDIS' && o.manufacturerName?.trim() === 'NXP';
+
+/** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter? }]. */
+export async function pFindRndis() {
+  if (process.platform === 'win32') {
+    const sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "Get-NetAdapter | Where-Object { $_.PnPDeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { $_.Name }"]).catch(() => '');
+    return sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+      .map((sAdapter) => ({ id: `net:${sAdapter}`, sAdapter, description: `Штрих-М — сетевая карта USB «${sAdapter}» (RNDIS)` }));
+  }
+  let aDevices = [];
+  try { aDevices = await oUsbApi().getDevices(); } catch { /* нет доступа к USB — нечего показать */ }
+  return aDevices.filter(bRndisUsb)
+    .map((oDev) => ({ id: `usb:${oDev.serialNumber || ''}`, oDev, description: `Штрих-М — USB ${oDev.serialNumber || ''} в режиме сетевой карты (RNDIS)` }));
+}
+
+// Linux: отцепить сетевой драйвер ядра (rndis_host) от ККТ, иначе интерфейс не забрать.
+function fDetachKernel() {
+  const usb = require('usb');
+  const oDev = usb.findByIds(N_RNDIS_VID, N_RNDIS_PID);
+  if (!oDev) return;
+  oDev.open();
+  try {
+    for (const oIface of oDev.interfaces || []) {
+      try { if (oIface.isKernelDriverActive()) oIface.detachKernelDriver(); } catch { /* не наш драйвер — дальше */ }
+    }
+  } finally {
+    oDev.close();
+  }
+}
+
+// TCP к ККТ как «сокет» kkt-core (send / onmessage / onopen), как у телепорта.
+function pTcpSocket(sHost, nPort) {
+  return new Promise((fResolve, fReject) => {
+    const oTcp = net.connect(nPort, sHost);
+    const oSocket = {
+      binaryType: 'arraybuffer', onmessage: null, onclose: null,
+      send: (u8a) => oTcp.write(Buffer.from(u8a.buffer ?? u8a, u8a.byteOffset ?? 0, u8a.byteLength ?? u8a.length)),
+      close: async () => oTcp.destroy(),
+      set onopen(f) { f?.(); },
+      get onopen() { return null; },
+    };
+    oTcp.on('data', (b) => oSocket.onmessage?.({ data: b.buffer.slice(b.byteOffset, b.byteOffset + b.length) }));
+    oTcp.on('close', () => oSocket.onclose?.());
+    oTcp.setTimeout(10e3, () => oTcp.destroy(new Error(`ККТ ${sHost}:${nPort} не ответила`)));
+    oTcp.once('connect', () => { oTcp.setTimeout(0); fResolve(oSocket); });
+    oTcp.once('error', fReject);
+  });
+}
+
+/** Перевести ККТ из RNDIS в USB-COM (VCOM) и перезагрузить. oFound — из pFindRndis. */
+export async function pRndisToCom(oFound) {
+  const { KKT } = oCore();
+  let oPort;
+  if (oFound.sAdapter) {
+    // Адрес шлюза ККТ — сетевой карте; уже задан — netsh ответит ошибкой, не беда.
+    await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0']).catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+    let oSocket = null;
+    for (let n = 0; n < 10 && !oSocket; n += 1) {
+      oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
+      if (!oSocket) await new Promise((f) => setTimeout(f, 1500));
+    }
+    if (!oSocket) throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778)`);
+    oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' });
+  } else {
+    try { fDetachKernel(); } catch (oError) { fLog(`RNDIS: драйвер ядра — ${oError.message}`); }
+    oPort = await KKT.pInitPort(oFound.oDev);
+  }
+  if (oPort.oError) throw new Error(oPort.oError.message);
+  const oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: 'shtrih', id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
+  try {
+    await oKKT.pTaskSender({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: true, usb: 'vcom' } });
+    await oKKT.pTaskSender({ type: 'rebootDevice' }).catch(() => {});
+    fLog(`ККТ ${oPort.sName}: USB — COM-порт (VCOM), перезагрузка`);
+    return { name: oPort.sName };
+  } finally {
+    await Promise.resolve(oPort.pDestroy?.(false)).catch(() => {});
+  }
 }
 
 /** COM-порт по настройке: на Windows — номер (как у Web Requests), иначе путь. */
