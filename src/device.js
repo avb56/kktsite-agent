@@ -150,6 +150,7 @@ export class Device {
     this.bReopen = false; // дескриптор закрыт после обрыва, новый ещё не открылся
     this.nReconnectTimer = 0;
     this.nRelinkTimer = 0;
+    this.bSwitching = false; // меняется связь Штриха: задания ждут, а не отказ
     this.fLog = null; // журнал агента: о подключении после повторов (registry.js)
   }
 
@@ -160,7 +161,8 @@ export class Device {
       name: this.name,
       connectionSettings: this.connectionSettings,
       otherSettings: this.otherSettings,
-      isActive: Boolean(this.oHandle),
+      // Смена связи Штриха (pShtrihMode) открывает ККТ заново — она подключена.
+      isActive: Boolean(this.oHandle) || this.bSwitching,
       isDefault: this.isDefault,
       // У Web Requests: isLock — очередь заблокирована сбоем, hasLicense —
       // в ККТ есть лицензия на Web Requests. Агенту лицензия не нужна.
@@ -286,7 +288,7 @@ export class Device {
     }
     // Не подключённой ККТ задание не принимаем: касса ждала бы результата,
     // который не придёт, пока кто-то не подключит ККТ руками.
-    if (!this.oHandle) {
+    if (!this.oHandle && !this.bSwitching) {
       throw new AgentError(409, `ККТ [${this.id}] не подключена${this.sLastError ? ': ' + this.sLastError : ''}`);
     }
     this.nNumber += 1;
@@ -360,25 +362,32 @@ export class Device {
   pShtrihMode(bSet, bMarking) {
     if (!bCoreModel(this.connectionSettings.model)) throw new AgentError(400, 'Режим USB — только у Штриха-М');
     if (!this.oHandle) throw new AgentError(409, `ККТ [${this.id}] не подключена`);
-    return this.pSerial(async () => {
-      const pGet = async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {};
-      const oMode = await pGet();
-      if (!bSet) return oMode;
-      if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты (RNDIS) — переключите её в VCOM сервисной программой Посцентра');
-      if (bMarking ? oMode.ppp === 3 && oMode.socks : oMode.ppp === 0) return oMode;
-      const bReboot = bMarking && !oMode.socks;
-      await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: bMarking ? { socks: true, ppp: 3 } : { socks: false, ppp: 0 } });
-      this.fLog?.(`ККТ [${this.id}] ${this.name}: режим USB — ${bMarking ? 'для маркировки (PPP, SOCKS)' : 'обычный (VCOM)'}`);
-      // Порт говорит новым протоколом не сразу (стенд: обычный — через пару секунд).
-      await this.pReopenHandle(4000, 30e3);
-      if (bReboot) {
-        // SOCKS ККТ читает при загрузке.
-        await this.oHandle.pProcess({ type: 'rebootDevice' }).catch(() => {});
-        this.fLog?.(`ККТ [${this.id}] ${this.name}: перезагрузка — включить SOCKS`);
-        await this.pReopenHandle(10e3, 60e3);
-      }
-      return pGet();
+    if (!bSet) return this.pSerial(async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {});
+    this.bSwitching = true;
+    return this.pSerial(() => this.pSwitchShtrih(bMarking)).finally(() => {
+      this.bSwitching = false;
+      this.fPump(); // задания, что пришли за время смены
     });
+  }
+
+  /** Сама смена связи Штриха — в цепочке обращений к ККТ (pShtrihMode). */
+  async pSwitchShtrih(bMarking) {
+    const pGet = async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {};
+    const oMode = await pGet();
+    if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты (RNDIS) — переключите её в VCOM сервисной программой Посцентра');
+    if (bMarking ? oMode.ppp === 3 && oMode.socks : oMode.ppp === 0) return oMode;
+    const bReboot = bMarking && !oMode.socks;
+    await this.oHandle.pProcess({ type: 'setShtrihUsbMode', shtrihUsbMode: bMarking ? { socks: true, ppp: 3 } : { socks: false, ppp: 0 } });
+    this.fLog?.(`ККТ [${this.id}] ${this.name}: связь — ${bMarking ? 'через этот компьютер (USB PPP, SOCKS)' : 'только USB (VCOM), без сети'}`);
+    // Порт говорит новым протоколом не сразу (стенд: обычный — через пару секунд).
+    await this.pReopenHandle(4000, 30e3);
+    if (bReboot) {
+      // SOCKS ККТ читает при загрузке.
+      await this.oHandle.pProcess({ type: 'rebootDevice' }).catch(() => {});
+      this.fLog?.(`ККТ [${this.id}] ${this.name}: перезагрузка — включить SOCKS`);
+      await this.pReopenHandle(10e3, 60e3);
+    }
+    return pGet();
   }
 
   /** Закрыть ККТ и открыть снова: подождать nWaitMs, пробовать до nTotalMs. */

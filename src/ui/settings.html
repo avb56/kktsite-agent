@@ -229,7 +229,8 @@
         <button type="button" data-act="copy">Скопировать</button>
       </div>
       <div class="mode-row" hidden>
-        <p><span class="muted">Режим ККТ:</span> <span class="mode"></span></p>
+        <p><span class="muted">Связь ККТ:</span> <span class="mode"></span></p>
+        <progress class="mode-progress" max="1" value="0" hidden></progress>
         <p class="muted mode-hint"></p>
       </div>
       <div class="check" hidden></div>
@@ -286,8 +287,8 @@
           <select name="ofdChannel"></select>
         </label>
         <p class="muted wide" data-core="yes" hidden>Штрих-М сервер ведёт сам, без драйверов Посцентра.
-          Порт с ККТ подставлен из найденных. Для маркировки после подключения — кнопка «Перевести в режим
-          для маркировки»: ККТ сама пойдёт в ОФД и ОИСМ через этот компьютер.</p>
+          Порт с ККТ подставлен из найденных. По USB у ККТ нет своей сети: после подключения — кнопка
+          «Включить связь через компьютер», и ККТ сама пойдёт в ОФД и ОИСМ через этот компьютер.</p>
       </div>
 
       <details data-core="no">

@@ -16,6 +16,11 @@ const mModes = new Map(); // id Штриха-М → режим USB ({ usb, ppp, 
 const sSwitching = new Set(); // id ККТ, у которых меняется режим
 let aPorts = []; // COM-порты ПК с распознанными ККТ (agentPorts)
 const bCore = (vModel) => vModel === 'shtrih';
+// Модели на странице — две: Атол (драйвер сам узнаёт модель) и Штрих-М. Полный
+// список Web Requests остаётся в API (utils/mapping) и для уже сохранённых ККТ.
+const A_UI_MODELS = [{ key: '500', description: 'Атол' }, { key: 'shtrih', description: 'Штрих-М' }];
+const sModelName = (vModel) => A_UI_MODELS.find((o) => o.key === String(vModel))?.description ?? sDescribe('model', vModel);
+const mSwitchStart = new Map(); // id → { nAt, nSec } — начало смены связи и ожидаемая длительность
 
 async function pApi(sMethod, sPath, vBody) {
   let oRes;
@@ -121,7 +126,7 @@ const sDescribe = (sField, vKey) =>
   oMapping?.[sField]?.find((o) => o.key === String(vKey))?.description ?? String(vKey ?? '');
 
 function sConnectionSummary(oConn) {
-  const aParts = [sDescribe('model', oConn.model)];
+  const aParts = [sModelName(oConn.model)];
   switch (oConn.port) {
     case 'usb': aParts.push(oConn.usbDevice && oConn.usbDevice !== 'auto' ? `USB ${oConn.usbDevice}` : 'USB, автоматически'); break;
     case 'com': aParts.push(bCore(oConn.model) ? (oConn.com || 'COM ?') : `${oConn.com || 'COM ?'}, ${oConn.baudRate} бод`); break;
@@ -294,6 +299,7 @@ function fRenderDevices() {
     q('.dot').classList.add(oDevice.isActive ? 'on' : oDevice.lastError ? 'fail' : 'off');
 
     let sState = oDevice.isActive ? 'Подключена' : 'Не подключена';
+    if (sSwitching.has(oDevice.id)) sState = 'Подключена, меняется связь — задания кассы ждут';
     if (oDevice.isActive && oDevice.oQueue) {
       sState += oDevice.oQueue.number ? `, заданий в очереди: ${oDevice.oQueue.number}` : ', очередь пуста';
     }
@@ -309,28 +315,32 @@ function fRenderDevices() {
 
     q('.kassa').textContent = sKassaUrl(oDevice.id);
 
-    // Штрих-М: режим USB и кнопка переключения.
+    // Штрих-М: связь ККТ с ОФД и ОИСМ (режим USB) и кнопка переключения.
+    oItem.dataset.id = oDevice.id;
     const oModeButton = q('[data-act="mode"]');
     // Пока режим меняется, ККТ на секунды «не подключена» (сервер открывает её заново) — строку не прячем.
     if (bCore(oDevice.connectionSettings.model) && (oDevice.isActive || sSwitching.has(oDevice.id))) {
       const oMode = mModes.get(oDevice.id);
       q('.mode-row').hidden = false;
-      const bMarking = oMode && oMode.ppp === 3 && oMode.socks;
+      const bNet = oMode && oMode.ppp === 3 && oMode.socks;
       if (sSwitching.has(oDevice.id)) {
-        q('.mode').textContent = 'переключается…';
-        q('.mode-hint').textContent = 'ККТ может перезагрузиться — до минуты. Задания кассы подождут.';
+        q('.mode').textContent = 'меняется…';
+        q('.mode-progress').hidden = false;
+        fUpdateProgress(oItem, oDevice.id);
       } else if (!oMode) {
         q('.mode').textContent = '…';
       } else if (oMode.sError) {
-        q('.mode').textContent = `не прочитан: ${oMode.sError}`;
+        q('.mode').textContent = `не прочитана: ${oMode.sError}`;
       } else {
-        q('.mode').textContent = bMarking
-          ? 'для маркировки — ККТ ходит в ОФД и ОИСМ через этот компьютер (PPP, SOCKS)'
-          : oMode.ppp === 3 ? 'PPP без SOCKS — ККТ не выходит в сеть, переключите заново' : 'обычный (VCOM)';
-        q('.mode-hint').textContent = bMarking ? '' : 'Для проверки кодов маркировки ККТ нужен выход в сеть — режим для маркировки.';
+        q('.mode').textContent = bNet
+          ? 'с ОФД и ОИСМ — через этот компьютер'
+          : oMode.ppp === 3 ? 'через компьютер, но не включена до конца — включите заново' : 'только USB, без выхода в сеть';
+        q('.mode-hint').textContent = bNet ? ''
+          : 'Документы не уходят в ОФД, коды маркировки не проверяются онлайн: своей сети у ККТ по USB нет.';
         oModeButton.hidden = false;
-        oModeButton.dataset.marking = bMarking ? '' : '1';
-        oModeButton.textContent = bMarking ? 'Вернуть обычный режим' : 'Перевести в режим для маркировки';
+        oModeButton.dataset.marking = bNet ? '' : '1';
+        oModeButton.textContent = bNet ? 'Отключить связь через компьютер' : 'Включить связь через компьютер';
+        if (!bNet) oModeButton.classList.add('primary');
       }
     }
 
@@ -383,22 +393,41 @@ async function pDeviceAction(sAct, oDevice, oButton) {
   }
 }
 
+// Полоса смены связи: сервер отвечает одним запросом в конце, поэтому — по
+// времени от ожидаемого (с перезагрузкой ККТ ~30 с, без — ~20 с), не дальше 95 %.
+function fUpdateProgress(oItem, sId) {
+  const o = mSwitchStart.get(sId);
+  if (!o) return;
+  const nSec = (Date.now() - o.nAt) / 1000;
+  oItem.querySelector('.mode-progress').value = Math.min(0.95, nSec / o.nSec);
+  oItem.querySelector('.mode-hint').textContent = `${Math.round(nSec)} с. ККТ может перезагрузиться — до минуты. Задания кассы подождут.`;
+}
+setInterval(() => {
+  for (const sId of sSwitching) {
+    const oItem = document.querySelector(`.device[data-id="${CSS.escape(sId)}"]`);
+    if (oItem) fUpdateProgress(oItem, sId);
+  }
+}, 500);
+
 async function pSwitchMode(oDevice, bMarking) {
+  const oMode = mModes.get(oDevice.id);
   const sText = bMarking
-    ? `Перевести «${oDevice.name}» в режим для маркировки? ККТ будет связываться с ОФД и ОИСМ через этот компьютер (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до минуты.`
-    : `Вернуть «${oDevice.name}» в обычный режим (USB VCOM)? Проверка кодов маркировки в ККТ работать перестанет: ей нужен выход в сеть.`;
-  if (!await pConfirm(sText, bMarking ? 'Перевести' : 'Вернуть')) return;
+    ? `Включить для «${oDevice.name}» связь через этот компьютер? ККТ сама будет отправлять документы в ОФД и проверять коды маркировки в ОИСМ — через сеть компьютера (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до минуты.`
+    : `Отключить для «${oDevice.name}» связь через компьютер? ККТ останется только на USB: документы перестанут уходить в ОФД, коды маркировки — проверяться онлайн.`;
+  if (!await pConfirm(sText, bMarking ? 'Включить' : 'Отключить')) return;
+  mSwitchStart.set(oDevice.id, { nAt: Date.now(), nSec: bMarking && !oMode?.socks ? 30 : 20 });
   sSwitching.add(oDevice.id);
   sBusy.add(oDevice.id);
   mModes.delete(oDevice.id);
   fRenderDevices();
   try {
     mModes.set(oDevice.id, await pApi('POST', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`, { marking: bMarking }));
-    oNotify.success(`${oDevice.name}: ${bMarking ? 'режим для маркировки' : 'обычный режим'}`);
+    oNotify.success(`${oDevice.name}: ${bMarking ? 'связь с ОФД и ОИСМ — через этот компьютер' : 'только USB, без выхода в сеть'}`);
   } catch (oError) {
     oNotify.error(oError.message);
   } finally {
     sSwitching.delete(oDevice.id);
+    mSwitchStart.delete(oDevice.id);
     sBusy.delete(oDevice.id);
     await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
   }
@@ -514,7 +543,10 @@ async function fOpenDeviceDialog(oDevice) {
   oForm.elements.name.value = oBase.name || '';
   oForm.elements.id.value = oDevice ? oDevice.id : '';
   oForm.elements.id.disabled = Boolean(oDevice);
-  fFillSelect(oForm.elements.model, oMapping.model, oConn.model);
+  // Сохранённая модель Атола, которой нет среди двух, — показываем её как есть.
+  const aModels = A_UI_MODELS.some((o) => o.key === String(oConn.model))
+    ? A_UI_MODELS : [...A_UI_MODELS, { key: String(oConn.model), description: sDescribe('model', oConn.model) }];
+  fFillSelect(oForm.elements.model, aModels, oConn.model);
   fFillSelect(oForm.elements.port, oMapping.port, oConn.port);
   fFillSelect(oForm.elements.usbDevice, oMapping.usbDevice, oConn.usbDevice || 'auto');
   fFillSelect(oForm.elements.baudRate, oMapping.baudRate, oConn.baudRate);

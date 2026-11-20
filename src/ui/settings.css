@@ -119,6 +119,8 @@ button.danger, button.danger-text { background: var(--err); border-color: var(--
 .device .kassa-row { margin: 4px 0 0 20px; }
 .device .mode-row { margin: 8px 0 0 20px; }
 .device .mode-row p { margin: 0; }
+.device .mode-progress { display: block; width: 100%; max-width: 420px; height: 8px; margin: 6px 0 2px; }
+.device .mode-progress[hidden] { display: none; }
 .kassa-row code { font-size: 13px; }
 .check {
   margin: 6px 0 0 20px;
