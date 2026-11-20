@@ -46,6 +46,7 @@ import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
+import { oPolicyAccess, oPutPolicyAccess } from './core.js';
 import { oGetSettings, oPutSettings } from './settings.js';
 import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
@@ -303,6 +304,23 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         if (oBody.action === 'check') return fSend(oRes, 200, await pPiotCheck({ fLog }));
         if (oBody.action === 'trust') return fSend(oRes, 200, oTrustPiot(oBody));
         throw new AgentError(400, "action: 'check' — проверить связь, 'trust' (с fingerprint) — доверять новому сертификату");
+      }
+    }
+
+    // Ключ лицензии и адрес сервера политик для kkt-core (Штрих-М): присылает
+    // касса, когда кассир вошёл в учётку; ключ наружу — только хвостом.
+    if (sPath === '/api/v2/agentPolicy') {
+      if (sMethod === 'GET') {
+        const { license, policyUrl } = oPolicyAccess();
+        return fSend(oRes, 200, { license: license ? '…' + license.slice(-4) : '', policyUrl });
+      }
+      if (sMethod === 'PUT') {
+        try {
+          return fSend(oRes, 200, oPutPolicyAccess(await pReadJson(oReq)));
+        } catch (oError) {
+          if (oError instanceof AgentError) throw oError;
+          throw new AgentError(400, oError.message);
+        }
       }
     }
 

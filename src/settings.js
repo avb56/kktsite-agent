@@ -3,13 +3,15 @@
 //
 // Применяются deleteRequestsAfter (в минутах), blockQueueOnPrintErrors
 // (device.js, «Блокировка очереди») и cancelWaitingRequestsAfter — своя
-// настройка агента, у Web Requests её нет (device.js, «Срок ожидания»). Остальные поля принимаются и хранятся,
+// настройка агента, у Web Requests её нет (device.js, «Срок ожидания»), и
+// vendorData — тоже своя (core.js). Остальные поля принимаются и хранятся,
 // чтобы настройки переносились между Web Requests и агентом как есть, но агент
 // по ним ещё ничего не делает: задания не проверяются при добавлении
 // (validateRequestsOnAdd), скрипты ДТО и доп. строки документа не подключены.
 
 import { AgentError, oQueueOptions } from './device.js';
 import { vReadJson, fWriteJson } from './store.js';
+import { fSetVendorData } from './core.js';
 
 const S_FILE = 'settings.json';
 
@@ -25,6 +27,10 @@ const O_DEFAULTS = {
   validateRequestsOnAdd: false,
   // Секунды; 0 — ждущие задания не отменяются (как у Web Requests).
   cancelWaitingRequestsAfter: 120,
+  // Своя настройка агента: служебные данные производителю ККТ (Штрих-М
+  // Посцентра шлёт состояние и заводской номер в DNS-именах *.kktlab.ru,
+  // core.js). По умолчанию — да (решение пользователя, 20.11.2026).
+  vendorData: true,
 };
 
 let oSettings = null;
@@ -41,6 +47,7 @@ function fApply(oNew) {
   oQueueOptions.nKeepMinutes = oNew.deleteRequestsAfter;
   oQueueOptions.bBlockOnPrintErrors = oNew.blockQueueOnPrintErrors;
   oQueueOptions.nWaitLimitSec = oNew.cancelWaitingRequestsAfter;
+  fSetVendorData(oNew.vendorData);
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */

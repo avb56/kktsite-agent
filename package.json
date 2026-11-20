@@ -2,7 +2,7 @@
   "name": "kktsite-agent",
   "version": "0.2.8",
   "private": true,
-  "description": "Локальный сервер кассы: ККТ Атол через драйвер ДТО 10, API как у «АТОЛ. Web Requests»",
+  "description": "Локальный сервер кассы: ККТ Атол через драйвер ДТО 10, Штрих-М через kkt-core; API как у «АТОЛ. Web Requests»",
   "type": "module",
   "main": "src/main.js",
   "bin": {
@@ -16,11 +16,13 @@
     "node": ">=20"
   },
   "dependencies": {
-    "kkt-core": "https://github.com/avb56/kkt-core-dist/releases/download/v0.1.1/kkt-core-0.1.1.tgz",
+    "@serialport/bindings-cpp": "10.8.0",
+    "kkt-core": "https://github.com/avb56/kkt-core-dist/releases/download/v0.2.54/kkt-core-0.2.54.tgz",
     "node-atol-wrapper": "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0"
   },
   "allowScripts": {
-    "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0": true
+    "github:avb56/node-atol-wrapper#6a3a50f320d42910bb752901ec52a66a38b867d0": true,
+    "@serialport/bindings-cpp@10.8.0": true
   },
   "devDependencies": {
     "esbuild": "0.28.2"

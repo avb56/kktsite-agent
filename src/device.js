@@ -18,6 +18,7 @@
 // выстраиваются в одну цепочку (pChain).
 
 import { oCreateHandle } from './driver.js';
+import { bCoreModel, oCreateCoreHandle } from './core.js';
 
 /** Общие настройки очередей; меняет settings.js по PUT /settings. */
 export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000, nWaitLimitSec: 120 };
@@ -101,6 +102,8 @@ const O_OFD_CHANNELS = { none: 0, usb: 1, proto: 2, auto: 2 };
 export function oDriverSettings(oConn = {}) {
   const sPort = oConn.port || 'usb';
   if (!(sPort in O_PORTS)) throw new AgentError(400, `Неизвестный тип подключения: ${sPort}`);
+  // ККТ через kkt-core (Штрих-М) — только по COM-порту (USB VCOM или RS-232).
+  if (bCoreModel(oConn.model) && sPort !== 'com') throw new AgentError(400, 'Эта модель подключается только по COM-порту');
   const oSettings = {
     Model: oConn.model ?? 500,
     Port: O_PORTS[sPort],
@@ -146,6 +149,7 @@ export class Device {
     this.nRecoverTimer = 0;
     this.bReopen = false; // дескриптор закрыт после обрыва, новый ещё не открылся
     this.nReconnectTimer = 0;
+    this.nRelinkTimer = 0;
     this.fLog = null; // журнал агента: о подключении после повторов (registry.js)
   }
 
@@ -175,16 +179,33 @@ export class Device {
     return pRun;
   }
 
+  /**
+   * Открыть ККТ: Атол — драйвером ДТО 10 (driver.js), Штрих-М — kkt-core
+   * (core.js). Не открылась — дескриптор закрыт, ошибка наружу.
+   */
+  async pOpenHandle() {
+    const bCore = bCoreModel(this.connectionSettings.model);
+    const oHandle = bCore ? oCreateCoreHandle() : oCreateHandle();
+    try {
+      // kkt-core сообщает об обрыве связи сам — тогда переподключаем, не
+      // дожидаясь задания (драйвер Атола восстанавливает связь сам).
+      if (bCore) oHandle.fOnLost = () => this.fScheduleRelink();
+      await oHandle.fOpen(bCore ? this.connectionSettings : oDriverSettings(this.connectionSettings));
+    } catch (oError) {
+      try { oHandle.fClose(); } catch { /* не открылась — закрывать нечего */ }
+      throw oError;
+    }
+    return oHandle;
+  }
+
   /** Подключить ККТ: открыть драйвер с её настройками и запустить очередь. */
   pActivate() {
-    return this.pSerial(() => {
+    return this.pSerial(async () => {
       if (this.oHandle) return;
       let oHandle;
       try {
-        oHandle = oCreateHandle();
-        oHandle.fOpen(oDriverSettings(this.connectionSettings));
+        oHandle = await this.pOpenHandle();
       } catch (oError) {
-        if (oHandle) try { oHandle.fClose(); } catch { /* не открылась — закрывать нечего */ }
         this.sLastError = oTaskError(oError).description;
         this.fScheduleReconnect();
         throw new AgentError(409, `ККТ [${this.id}] не подключилась: ${this.sLastError}`);
@@ -212,6 +233,22 @@ export class Device {
     this.nReconnectTimer.unref?.();
   }
 
+  // Связь с ККТ через kkt-core оборвалась (ККТ перезагрузилась, PPP закрыт):
+  // открыть заново запросом состояния — pProbe переоткрывает по коду 241. Не
+  // вышло — снова через nReconnectMs, пока ККТ подключена.
+  fScheduleRelink(nDelayMs = 1000) {
+    if (this.nRelinkTimer || !this.oHandle) return;
+    this.nRelinkTimer = setTimeout(() => {
+      this.nRelinkTimer = 0;
+      if (!this.oHandle) return;
+      this.pSerial(() => this.pProbe({ type: 'getDeviceStatus' })).then(
+        () => this.fLog?.(`ККТ [${this.id}] ${this.name}: связь восстановлена`),
+        () => this.fScheduleRelink(oQueueOptions.nReconnectMs),
+      );
+    }, nDelayMs);
+    this.nRelinkTimer.unref?.();
+  }
+
   /** Попытка подключить ККТ, которую хотят подключённой. Не бросает. */
   pReconnect() {
     if (this.oHandle || !this.bWantActive) return Promise.resolve();
@@ -226,6 +263,8 @@ export class Device {
     this.bWantActive = false;
     clearTimeout(this.nReconnectTimer);
     this.nReconnectTimer = 0;
+    clearTimeout(this.nRelinkTimer);
+    this.nRelinkTimer = 0;
     return this.pSerial(() => {
       if (!this.oHandle) return;
       if (!this.bReopen) this.oHandle.fClose(); // при bReopen он уже закрыт
@@ -482,13 +521,7 @@ export class Device {
         try { this.oHandle.fClose(); } catch { /* уже закрыт */ }
       }
     }
-    const oHandle = oCreateHandle();
-    try {
-      oHandle.fOpen(oDriverSettings(this.connectionSettings));
-    } catch (oError) {
-      try { oHandle.fClose(); } catch { /* не открылся — закрывать нечего */ }
-      throw oError;
-    }
+    const oHandle = await this.pOpenHandle();
     this.oHandle = oHandle;
     this.bReopen = false;
     return oHandle.pProcess(oTask);
