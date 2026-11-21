@@ -418,6 +418,8 @@ async function pLoadRndis() {
   aRndis = await pApi('GET', 'agentRndis').catch(() => []);
   $('rndis-box').hidden = !aRndis.length;
   $('rndis-list').textContent = aRndis.map((o) => o.description).join('; ');
+  // Без драйвера RNDIS (Windows 7) перевести нечем — только подсказка.
+  $('rndis-button').hidden = aRndis.every((o) => o.bNoDriver);
 }
 
 async function pRndisToCom() {

@@ -330,7 +330,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     // перевести в USB-COM (VCOM) и перезагрузить (core.js).
     if (sPath === '/api/v2/agentRndis') {
       const aFound = await pFindRndis();
-      if (sMethod === 'GET') return fSend(oRes, 200, aFound.map(({ id, description }) => ({ id, description })));
+      if (sMethod === 'GET') return fSend(oRes, 200, aFound.map(({ id, description, bNoDriver }) => ({ id, description, ...(bNoDriver ? { bNoDriver } : {}) })));
       if (sMethod === 'POST') {
         const sId = (await pReadJson(oReq)).id;
         const oFound = aFound.find((o) => !sId || o.id === sId);

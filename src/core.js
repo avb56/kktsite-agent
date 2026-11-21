@@ -192,14 +192,46 @@ function oUsbApi() {
 const bRndisUsb = (o) => o?.vendorId === N_RNDIS_VID && o.productId === N_RNDIS_PID
   && o.productName?.trim() === 'RNDIS' && o.manufacturerName?.trim() === 'NXP';
 
-/** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter? }]. */
-export async function pFindRndis() {
-  if (process.platform === 'win32') {
-    const sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "Get-NetAdapter | Where-Object { $_.PnPDeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { $_.Name }"]).catch(() => '');
-    return sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-      .map((sAdapter) => ({ id: `net:${sAdapter}`, sAdapter, description: `Штрих-М — сетевая карта USB «${sAdapter}» (RNDIS)` }));
+// Windows: сетевая карта ККТ — через WMI (Win32_NetworkAdapter, имя
+// подключения — для netsh). Не Get-NetAdapter: его нет в PowerShell 2.0
+// Windows 7 (21.11.2026: Штрих в RNDIS на Win7 агент не видел вовсе). Если
+// сетевой карты нет, но устройство ККТ в системе есть (Win32_PnPEntity), —
+// Windows не поставила ему драйвер RNDIS: так и говорим.
+const S_RNDIS_WMI = [
+  "$ErrorActionPreference = 'SilentlyContinue'",
+  "Get-WmiObject Win32_NetworkAdapter | Where-Object { $_.PNPDeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { 'net|' + $_.NetConnectionID }",
+  "Get-WmiObject Win32_PnPEntity | Where-Object { $_.DeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { 'pnp|' + $_.ConfigManagerErrorCode + '|' + $_.Name }",
+].join('; ');
+
+let sRndisWarned = '';
+async function pFindRndisWindows() {
+  let sOut = '';
+  try {
+    sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', S_RNDIS_WMI]);
+  } catch (oError) {
+    if (sRndisWarned !== oError.message) fLog(`RNDIS: поиск сетевой карты ККТ не удался — ${oError.message}`);
+    sRndisWarned = oError.message;
+    return [];
   }
+  const aLines = sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((s) => s.split('|'));
+  const aNet = aLines.filter((a) => a[0] === 'net' && a[1]).map((a) => a[1]);
+  if (aNet.length) {
+    return aNet.map((sAdapter) => ({ id: `net:${sAdapter}`, sAdapter, description: `Штрих-М — сетевая карта USB «${sAdapter}» (RNDIS)` }));
+  }
+  // Устройство есть, сетевой карты нет — без драйвера (код 28) или с ошибкой.
+  return aLines.filter((a) => a[0] === 'pnp').map((a) => ({
+    id: `pnp:${a.slice(2).join('|')}`,
+    bNoDriver: true,
+    description: `Штрих-М в режиме сетевой карты USB (RNDIS), но Windows не поставила ему драйвер`
+      + ` («${a.slice(2).join('|') || 'неизвестное устройство'}», код ${a[1] || '?'}). В диспетчере устройств:`
+      + ' «Обновить драйвер» → «Выбрать из списка» → «Сетевые адаптеры» → Microsoft → «Remote NDIS'
+      + ' Compatible Device». Или переведите ККТ в USB-COM утилитой производителя.',
+  }));
+}
+
+/** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter?, bNoDriver? }]. */
+export async function pFindRndis() {
+  if (process.platform === 'win32') return pFindRndisWindows();
   let aDevices = [];
   try { aDevices = await oUsbApi().getDevices(); } catch { /* нет доступа к USB — нечего показать */ }
   return aDevices.filter(bRndisUsb)
@@ -242,6 +274,7 @@ function pTcpSocket(sHost, nPort) {
 
 /** Перевести ККТ из RNDIS в USB-COM (VCOM) и перезагрузить. oFound — из pFindRndis. */
 export async function pRndisToCom(oFound) {
+  if (oFound.bNoDriver) throw new Error('Windows не поставила ККТ драйвер RNDIS — сначала драйвер (подсказка — в плашке)');
   const { KKT } = oCore();
   let oPort;
   if (oFound.sAdapter) {
