@@ -686,7 +686,9 @@ async function fOpenDeviceDialog(oDevice) {
   oForm.reset();
   oForm.querySelectorAll('.touched').forEach((o) => o.classList.remove('touched'));
   oForm.elements.name.value = oBase.name || '';
-  oForm.elements.id.value = oDevice ? oDevice.id : '';
+  // Новой — следующий номер, как выберет сервер (registry.js sNextId); можно сменить.
+  oForm.elements.id.value = oDevice ? oDevice.id
+    : String(Math.max(0, ...aDevices.map((o) => o.id).filter((s) => /^\d+$/.test(s)).map(Number)) + 1);
   oForm.elements.id.disabled = Boolean(oDevice);
   oForm.elements.vendor.value = sVendor;
   fFillSelect(oForm.elements.model, oMapping.model, sVendor === 'atol' ? oConn.model : 500);

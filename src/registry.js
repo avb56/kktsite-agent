@@ -146,9 +146,10 @@ export class Registry {
     oDevice.isDefault = true;
   }
 
+  // Следующий номер — больше всех числовых id: номер удалённой ККТ не
+  // достаётся новой (у кассы мог остаться адрес с ?deviceID= старой).
   sNextId() {
-    let n = 1;
-    while (this.mDevices.has(String(n))) n += 1;
-    return String(n);
+    const nMax = Math.max(0, ...[...this.mDevices.keys()].filter((s) => /^\d+$/.test(s)).map(Number));
+    return String(nMax + 1);
   }
 }
