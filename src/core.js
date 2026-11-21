@@ -21,6 +21,8 @@
 
 import { pHttpFetch } from './http-fetch.js';
 import net from 'node:net';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { execFile } from 'node:child_process';
 import dns from 'node:dns';
 import { createRequire } from 'node:module';
@@ -264,8 +266,17 @@ async function pFindRndisWmi() {
 async function pFindRndisUsb() {
   let aDevices = [];
   try { aDevices = await oUsbApi().getDevices(); } catch { /* нет доступа к USB — нечего показать */ }
-  return aDevices.filter(bRndisUsb)
+  const aOurs = aDevices.filter(bRndisUsb)
     .map((oDev) => ({ id: `usb:${oDev.serialNumber || ''}`, oDev, description: `Штрих-М — USB ${oDev.serialNumber || ''} в режиме сетевой карты (RNDIS)` }));
+  if (aOurs.length) return aOurs;
+  // Код 18d1:4ee4 есть, а имени не прочесть — нет доступа к устройству (имя
+  // читается только открыв его). Без правила udev так и выглядит (стенд, 21.11.2026).
+  const bLocked = aDevices.some((o) => o.vendorId === N_RNDIS_VID && o.productId === N_RNDIS_PID && !o.productName);
+  return bLocked ? [{
+    id: 'usb:locked', bNoDriver: true,
+    description: 'Похоже, Штрих-М в режиме сетевой карты USB (RNDIS), но у сервера нет доступа к USB-устройству:'
+      + ' нужно правило udev — его ставит «kktsite-agent service install» (от root); потом переподключите ККТ.',
+  }] : [];
 }
 
 // Запасной путь: ККТ отвечает по сети USB на своём адресе по умолчанию — сеть
@@ -283,11 +294,39 @@ function bRndisTcp(nTimeoutMs = 1500) {
 
 /** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter?, sHost?, bNoDriver? }]. */
 export async function pFindRndis() {
+  // Linux: сеть ККТ уже настроена в ОС (адрес на интерфейсе rndis_host, ККТ
+  // отвечает) — работаем через неё и устройство не забираем: им может
+  // пользоваться и другая программа. Нет — напрямую по USB.
+  // Признак — интерфейс ККТ в ОС с адресом из её сети, а не ответ на TCP:
+  // сразу после закрытия соединения ККТ отвечает не всегда, и агент забирал
+  // устройство себе, снося настроенный интерфейс (стенд, 21.11.2026).
+  const sIface = process.platform === 'win32' ? '' : sLinuxRndisIface();
+  if (sIface) {
+    return [{ id: `tcp:${A_RNDIS_KKT}`, sHost: A_RNDIS_KKT, sIface, description: `Штрих-М — сеть USB, настроенная в ОС (${sIface}, ${A_RNDIS_KKT})` }];
+  }
   const aFound = process.platform === 'win32' ? await pFindRndisWindows() : await pFindRndisUsb();
   if (aFound.some((o) => !o.bNoDriver)) return aFound;
   if (!await bRndisTcp()) return aFound;
   // Ответила по сети — значит, драйвер есть: подсказка «нет драйвера» лишняя.
   return [{ id: `tcp:${A_RNDIS_KKT}`, sHost: A_RNDIS_KKT, description: `Штрих-М отвечает по сети USB (${A_RNDIS_KKT}) — режим сетевой карты (RNDIS)` }];
+}
+
+/** Linux: интерфейс ОС у ККТ в RNDIS с адресом из сети ККТ (192.168.137.x) — его имя, иначе ''. */
+function sLinuxRndisIface() {
+  const S_USB = '/sys/bus/usb/devices';
+  try {
+    for (const sDev of readdirSync(S_USB)) {
+      const sRead = (s) => { try { return readFileSync(`${S_USB}/${sDev}/${s}`, 'utf8').trim(); } catch { return ''; } };
+      if (sRead('idVendor') !== '18d1' || sRead('idProduct') !== '4ee4') continue;
+      const sNet = `${S_USB}/${sDev}:1.0/net`;
+      if (!existsSync(sNet)) continue;
+      for (const sIface of readdirSync(sNet)) {
+        const bOurNet = (networkInterfaces()[sIface] || []).some((o) => o.family === 'IPv4' && o.address.startsWith('192.168.137.') && o.address !== A_RNDIS_KKT);
+        if (bOurNet) return sIface;
+      }
+    }
+  } catch { /* нет sysfs — значит, и интерфейса */ }
+  return '';
 }
 
 // Linux: отцепить сетевой драйвер ядра (rndis_host) от ККТ, иначе интерфейс не забрать.
@@ -328,7 +367,7 @@ function pTcpSocket(sHost, nPort) {
 
 /** Порт kkt-core к ККТ в режиме RNDIS. oFound — из pFindRndis. */
 async function pOpenRndisPort(oFound) {
-  if (oFound.bNoDriver) throw new Error('Windows не поставила ККТ драйвер RNDIS: в диспетчере устройств — «Обновить драйвер» → «Сетевые адаптеры» → Microsoft → «Remote NDIS Compatible Device»');
+  if (oFound.bNoDriver) throw new Error(oFound.description);
   const { KKT } = oCore();
   if (!oFound.sAdapter && !oFound.sHost) {
     // Linux: сеть ККТ — своим стеком kkt-core поверх USB, как у кассы в браузере.
@@ -347,17 +386,37 @@ async function pOpenRndisPort(oFound) {
         .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
     }
   }
-  let oSocket = null;
-  for (let n = 0; n < 10 && !oSocket; n += 1) {
-    oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
-    if (!oSocket) await pSleep(1500);
+  // Только что закрытое соединение ККТ отпускает не сразу: новое она принимает,
+  // но порт команд не открывает (стенд, 21.11.2026) — пауза, как у PPP, и повтор.
+  await pSleep(Math.max(0, (mPppClosedAt.get(S_RNDIS_TCP) ?? 0) + N_PPP_REOPEN_MS - Date.now()));
+  let oPort = null;
+  let oLastError = null;
+  for (let n = 0; n < 10 && !oPort; n += 1) {
+    const oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
+    if (oSocket) {
+      oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' }).catch((oError) => ({ oError }));
+      if (oPort.oError) {
+        oLastError = oPort.oError;
+        await oSocket.close();
+        oPort = null;
+      } else {
+        // У порта поверх готового сокета kkt-core своего pDestroy не ставит —
+        // без этого соединение оставалось открытым, а второе ККТ не обслуживает
+        // (стенд, 21.11.2026; вероятно, и «первая попытка не прошла» на Windows 7).
+        oPort.pDestroy ??= async () => oSocket.close();
+      }
+    }
+    if (!oPort) await pSleep(1500);
   }
-  if (!oSocket) {
-    throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778). Если с ней сейчас работает драйвер или утилита`
+  if (!oPort) {
+    throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778${oLastError ? `: ${oLastError.message}` : ''}). Если с ней сейчас работает драйвер или утилита`
       + ' производителя (тест драйвера, ККТ config, kktproxy) — закройте их: ККТ может не принять второе подключение по сети');
   }
-  return KKT.pInitPort({ oSocket, sType: 'shtrih' });
+  oPort.sAgentPath = S_RNDIS_TCP;
+  oPort.bAgentTcp = true;
+  return oPort;
 }
+const S_RNDIS_TCP = 'tcp:rndis';
 
 // PPP, только что закрытый (переподключение, смена настроек, поиск), сразу не
 // открывается: ККТ ещё не ждёт нового рукопожатия, первая попытка уходит в
@@ -395,10 +454,13 @@ async function pOpenComOnce(sPath, nBaudRate, sType) {
 
 /** Канал открытого порта Штриха: RNDIS, PPP (сокет поверх COM) или VCOM. */
 const sPortChannel = (oPort) => (oPort.oSerial ? 'ppp' : oPort.oSocket ? 'rndis' : 'vcom');
+/** RNDIS через сеть ОС (TCP к ККТ), а не своим стеком kkt-core: своей сети у ККТ
+ * тогда нет — выход в ОФД только через SOCKS-сервер или маршрутизацию ОС. */
+const bOsNet = (oFound) => Boolean(oFound?.sHost || oFound?.sAdapter);
 
 const pSleep = (nMs) => new Promise((f) => setTimeout(f, nMs));
 function pDestroy(oPort) {
-  if (oPort?.oSerial && oPort.sAgentPath) mPppClosedAt.set(oPort.sAgentPath, Date.now());
+  if ((oPort?.oSerial || oPort?.bAgentTcp) && oPort.sAgentPath) mPppClosedAt.set(oPort.sAgentPath, Date.now());
   return Promise.resolve(oPort?.pDestroy?.(false)).catch(() => {});
 }
 
@@ -411,13 +473,24 @@ function oTempKkt(oPort) {
   oPort.nOfdDownUntil = Number.MAX_SAFE_INTEGER;
   const oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: 'shtrih', id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
   return async (oTask) => {
+    // pTaskSender отдаёт сами результаты заданий (как pProcess у дескриптора), ошибки — броском.
     const [oResult] = await oKKT.pTaskSender(oTask);
     if (oResult?.status === 'error') throw new Error(oResult.error?.description || 'ошибка ККТ');
-    return oResult?.result ?? {};
+    return oResult ?? {};
   };
 }
 
 // ——— Поиск ККТ ———
+
+/** Режим USB Штриха (getShtrihUsbMode) — что с SOCKS; не прочитался — undefined. */
+async function pReadMode(oPort) {
+  try {
+    return (await oTempKkt(oPort)({ type: 'getShtrihUsbMode' })).shtrihUsbMode;
+  } catch (oError) {
+    fLog(`ККТ ${oPort.sName}: режим USB не прочитан — ${oError.message}`);
+    return undefined;
+  }
+}
 
 const A_SHTRIH_CHANNELS = ['vcom', 'ppp', 'rndis'];
 
@@ -434,13 +507,15 @@ export async function pFindKkt(aHeld = []) {
     if (!oPort.model) continue;
     const oItem = { model: oPort.model, channel: oPort.model === 'atol' ? 'usb' : 'vcom', com: oPort.key, description: oPort.description };
     const oHeld = aHeld.find((o) => o.com && sPortPath(o.com) === oPort.path);
-    if (oHeld) Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, channel: oHeld.channel || oItem.channel });
-    else if (oPort.model === 'shtrih') {
+    if (oHeld) {
+      Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, channel: oHeld.channel || oItem.channel });
+      if (oPort.model === 'shtrih') oItem.mode = await oHeld.pMode?.().catch(() => undefined);
+    } else if (oPort.model === 'shtrih') {
       let oKkt = null;
       try {
         oKkt = await pOpenComPort(oPort.path);
         if (oKkt.oError) throw oKkt.oError;
-        Object.assign(oItem, { channel: sPortChannel(oKkt), name: oKkt.sName });
+        Object.assign(oItem, { channel: sPortChannel(oKkt), name: oKkt.sName, mode: await pReadMode(oKkt) });
       } catch (oError) {
         oItem.error = oError.message;
       } finally {
@@ -450,16 +525,19 @@ export async function pFindKkt(aHeld = []) {
     aOut.push(oItem);
   }
   for (const oFound of await pFindRndis()) {
-    const oItem = { model: 'shtrih', channel: 'rndis', description: oFound.description };
+    const oItem = { model: 'shtrih', channel: 'rndis', description: oFound.description, ...(bOsNet(oFound) ? { osNet: true } : {}) };
     const oHeld = aHeld.find((o) => o.channel === 'rndis');
-    if (oHeld) Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name });
+    if (oHeld) {
+      Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, mode: await oHeld.pMode?.().catch(() => undefined) });
+      if (oHeld.osNet !== undefined) oItem.osNet = oHeld.osNet || undefined;
+    }
     else if (oFound.bNoDriver) oItem.error = oFound.description;
     else {
       let oKkt = null;
       try {
         oKkt = await pOpenRndisPort(oFound);
         if (oKkt.oError) throw oKkt.oError;
-        oItem.name = oKkt.sName;
+        Object.assign(oItem, { name: oKkt.sName, mode: await pReadMode(oKkt) });
       } catch (oError) {
         oItem.error = oError.message;
       } finally {
@@ -478,12 +556,18 @@ export async function pFindKkt(aHeld = []) {
 // протоколом), таблица 16 поле 19 — SOCKS (после перезагрузки). Стенд,
 // 20–21.11.2026; подробнее — у pSwitchShtrih (device.js).
 
+/** Какую ККТ в RNDIS открывать; нет такой — ошибка с причиной (нет драйвера, нет доступа). */
+async function pRndisToOpen() {
+  const aFound = await pFindRndis();
+  const oFound = aFound.find((o) => !o.bNoDriver);
+  if (!oFound) throw new Error(aFound[0]?.description || 'ККТ в режиме сетевой карты USB (RNDIS) не найдена');
+  return oFound;
+}
+
 /** Открыть Штрих на канале oFrom ({ channel, com? }) — порт kkt-core. */
 async function pOpenChannel(oFrom) {
   if (oFrom.channel === 'rndis') {
-    const oFound = (await pFindRndis()).find((o) => !o.bNoDriver);
-    if (!oFound) throw new Error('ККТ в режиме сетевой карты USB (RNDIS) не найдена');
-    return pOpenRndisPort(oFound);
+    return pOpenRndisPort(await pRndisToOpen());
   }
   if (!oFrom.com) throw new Error('Не выбран COM-порт ККТ');
   return pOpenComPort(sPortPath(oFrom.com));
@@ -585,6 +669,32 @@ export async function pShtrihSwitch(oFrom, sTo) {
   }
 }
 
+/**
+ * SOCKS в Штрихе (таблица 16 поле 19) — включить или выключить и
+ * перезагрузить: ККТ читает его при загрузке. С SOCKS ККТ ходит в ОФД и ОИСМ
+ * через SOCKS-сервер 192.168.137.1:1080 (агента или kktproxy), без него —
+ * напрямую через шлюз 192.168.137.1 (общий доступ к интернету в Windows).
+ * oFrom — { channel, com? } свободного порта ККТ.
+ */
+export async function pShtrihSetSocks(oFrom, bSocks) {
+  const oPort = await pOpenChannel(oFrom);
+  try {
+    const fRun = oTempKkt(oPort);
+    await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: Boolean(bSocks) } });
+    try {
+      await fRun({ type: 'rebootDevice' });
+    } catch (oError) {
+      fLog(`ККТ ${oPort.sName}: SOCKS ${bSocks ? 'включён' : 'выключен'}, перезагрузка не прошла (${oError.message})`);
+      return { rebootNeeded: true };
+    }
+    fLog(`ККТ ${oPort.sName}: SOCKS ${bSocks ? 'включён' : 'выключен'}, перезагрузка`);
+  } finally {
+    await pDestroy(oPort);
+  }
+  const oNow = await pWaitChannel(oFrom.channel, 90e3, 10e3);
+  return oNow ?? { rebootNeeded: true };
+}
+
 const R_PORT_GONE = /File not found|The device does not recognize the command|device (is not connected|has been lost)|Порт ККТ закрыт|stream was destroyed|ENOENT|ENXIO|EIO\b/i;
 
 /** COM-порт по настройке: на Windows — номер (как у Web Requests), иначе путь. */
@@ -603,9 +713,9 @@ export function oCreateCoreHandle() {
       // сетевая карта ОС и TCP к 192.168.137.111. Иначе — COM-порт (VCOM или
       // PPP — kkt-core различит сам).
       if (oConn.port === 'rndis') {
-        const oFound = (await pFindRndis()).find((o) => !o.bNoDriver);
-        if (!oFound) throw Object.assign(new Error('ККТ в режиме сетевой карты USB (RNDIS) не найдена'), { code: N_NO_CONNECTION });
+        const oFound = await pRndisToOpen().catch((oError) => { throw Object.assign(oError, { code: N_NO_CONNECTION }); });
         oPort = await pOpenRndisPort(oFound).catch((oError) => { throw Object.assign(new Error(oError.message), { code: N_NO_CONNECTION }); });
+        this.bOsNet = bOsNet(oFound);
       } else {
         const sPath = sPortPath(oConn.com);
         if (!sPath) throw Object.assign(new Error('Не выбран COM-порт ККТ'), { code: N_NO_CONNECTION });
@@ -651,6 +761,8 @@ export function oCreateCoreHandle() {
     },
     /** Канал, на котором ККТ открыта: vcom | ppp | rndis. */
     sChannel: '',
+    /** RNDIS через сеть ОС (TCP), а не стеком kkt-core. */
+    bOsNet: false,
     fClose() {
       const o = oPort;
       oPort = null;

@@ -542,6 +542,11 @@ function fRenderChannels(bVendorChanged = false) {
     }
     // Атол: что нашлось — только у USB (драйвер ищет сам); у прочих каналов не пишем.
     if (sVendor !== 'atol' || oChannel.key === 'usb') oBox.append(oChannelState(sVendor, oChannel.key));
+    // Штрих в сети USB через сеть ОС: своей сети у ККТ нет — как она выходит в ОФД.
+    if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding) {
+      const oHere = oFoundOn(sVendor, sChannel);
+      if (oHere?.osNet && oHere.mode) oBox.append(...aNetRows(oHere));
+    }
     // Выбран канал, на нём ККТ нет, а Штрих есть на другом — предложить перевод.
     if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding && !oFoundOn(sVendor, sChannel)) {
       const oFrom = oShtrihElsewhere(sChannel);
@@ -592,7 +597,7 @@ async function pFindKkt() {
   fSetFindState('Ищу ККТ на портах и в сети USB…');
   fRenderChannels();
   try {
-    [aFound, aPorts] = await Promise.all([pApi('GET', 'agentFind'), pApi('GET', 'agentPorts').catch(() => [])]);
+    [aFound, aPorts] = await Promise.all([pApi('GET', 'agentFind'), pApi('GET', 'agentPorts').catch(() => []), pLoadSocks()]);
   } catch (oError) {
     aFound = [];
     fSetFindState(`Поиск не удался: ${oError.message}`);
@@ -625,31 +630,71 @@ async function pFindKkt() {
   fRenderChannels();
 }
 
+/** Как ККТ в сети ОС выходит в ОФД и ОИСМ: строка и кнопка переключения SOCKS в ККТ. */
+function aNetRows(oHere) {
+  const oP = document.createElement('p');
+  const bSocks = Boolean(oHere.mode.socks);
+  let bOk = true;
+  let sText;
+  if (bSocks) {
+    sText = 'Выход ККТ в сеть — через SOCKS-сервер 192.168.137.1:1080. ';
+    if (oSocks?.listening) sText += 'SOCKS-сервер агента работает.';
+    else if (oSocks?.enabled) sText += `SOCKS-сервер агента не работает: ${oSocks.error || 'запускается'}.`;
+    else {
+      bOk = false;
+      sText += 'SOCKS-сервер агента выключен: включите его на вкладке «Общие» (или запустите kktproxy Посцентра) — либо выключите SOCKS в ККТ и включите общий доступ к интернету.';
+    }
+  } else {
+    sText = 'Выход ККТ в сеть — напрямую через шлюз 192.168.137.1: на этом компьютере нужен общий доступ к интернету'
+      + ' (Windows: свойства подключения к интернету → «Доступ» → разрешить для сетевой карты ККТ; Linux: пересылка пакетов и NAT). Иначе — включите SOCKS в ККТ и SOCKS-сервер агента.';
+  }
+  oP.className = `channel-state ${bOk ? 'muted' : 'error'}`;
+  oP.textContent = sText;
+  const oButton = Object.assign(document.createElement('button'), {
+    type: 'button', textContent: bSocks ? 'Выключить SOCKS в ККТ' : 'Включить SOCKS в ККТ',
+  });
+  oButton.disabled = bSwitchingChannel;
+  oButton.addEventListener('click', () => pSetKktSocks(oHere, !bSocks));
+  return [oP, oButton];
+}
+
+async function pSetKktSocks(oHere, bSocks) {
+  const sHeld = oHere.heldBy ? ` ККТ #${oHere.heldBy} на это время отключится — сохраните окно, и она подключится заново.` : '';
+  if (!await pConfirm(`${bSocks ? 'Включить' : 'Выключить'} SOCKS в ККТ «${oHere.name || 'Штрих-М'}»? ККТ перезагрузится.${sHeld}`, bSocks ? 'Включить' : 'Выключить')) return;
+  await pRunKktChange('agentShtrihSocks', { from: { channel: oHere.channel, com: oHere.com }, socks: bSocks },
+    `SOCKS в ККТ ${bSocks ? 'включён' : 'выключен'}`, 'Меняю SOCKS в ККТ', 40);
+}
+
 /** Перевести Штрих на канал sTo (agentSwitch): до двух с половиной минут. */
 async function pSwitchChannel(oFrom, sTo) {
   const sFrom = O_SHTRIH_CHANNELS[oFrom.channel].title;
   const sToTitle = O_SHTRIH_CHANNELS[sTo].title;
   const sHeld = oFrom.heldBy ? ` ККТ #${oFrom.heldBy} на время перевода отключится — сохраните окно, и она подключится заново.` : '';
   if (!await pConfirm(`Перевести ККТ «${oFrom.name || 'Штрих-М'}» с канала «${sFrom}» на «${sToTitle}»? ККТ сменит режим USB и, скорее всего, перезагрузится — до двух с половиной минут.${sHeld}`, 'Перевести')) return;
+  await pRunKktChange('agentSwitch', { from: { channel: oFrom.channel, com: oFrom.com }, to: sTo },
+    `ККТ теперь на канале «${sToTitle}»`, `Перевожу ККТ на «${sToTitle}»`, sTo === 'ppp' && oFrom.channel === 'vcom' ? 120 : 40);
+}
+
+/** Смена в ККТ с перезагрузкой (agentSwitch, agentShtrihSocks): полоса хода, потом поиск заново. */
+async function pRunKktChange(sMethod, oBody, sDone, sDoing, nExpect) {
   bSwitchingChannel = true;
   $('device-save').disabled = true;
   $('find-again').disabled = true;
   const nAt = Date.now();
-  const nExpect = sTo === 'ppp' && oFrom.channel === 'vcom' ? 120 : 40;
   const oProgress = $('switch-progress');
   oProgress.hidden = false;
   const nTimer = setInterval(() => {
     const nSec = (Date.now() - nAt) / 1000;
     oProgress.value = Math.min(0.95, nSec / nExpect);
-    fSetFindState(`Перевожу ККТ на «${sToTitle}»: ${Math.round(nSec)} с. ККТ может перезагрузиться.`);
+    fSetFindState(`${sDoing}: ${Math.round(nSec)} с. ККТ может перезагрузиться.`);
   }, 500);
   fRenderChannels();
   try {
-    const oNow = await pApi('POST', 'agentSwitch', { from: { channel: oFrom.channel, com: oFrom.com }, to: sTo });
+    const oNow = await pApi('POST', sMethod, oBody);
     if (oNow.rebootNeeded) {
-      oNotify.warning(`Режим «${sToTitle}» записан, но ККТ не перезагрузилась сама — перезагрузите её кнопкой питания, потом «Искать снова».`);
+      oNotify.warning('Записано, но ККТ не перезагрузилась сама — перезагрузите её кнопкой питания, потом «Искать снова».');
     } else {
-      oNotify.success(`ККТ теперь на канале «${sToTitle}»`);
+      oNotify.success(sDone);
     }
     if (oEditing) mModes.delete(oEditing.id);
     if (oNow.deactivated) {
@@ -1005,6 +1050,15 @@ async function pLoadSettings() {
   $('settings-form').elements.blockQueueOnPrintErrors.checked = oSettings.blockQueueOnPrintErrors;
   $('settings-form').elements.cancelWaitingRequestsAfter.value = oSettings.cancelWaitingRequestsAfter;
   $('settings-form').elements.vendorData.checked = oSettings.vendorData !== false;
+  $('settings-form').elements.socksServer.checked = oSettings.socksServer === true;
+  await pLoadSocks();
+}
+
+let oSocks = null; // состояние SOCKS-сервера агента (agentSocks)
+async function pLoadSocks() {
+  oSocks = await pApi('GET', 'agentSocks').catch(() => null);
+  $('socks-state').textContent = !oSocks || !oSocks.enabled ? ''
+    : oSocks.listening ? `Сейчас: работает, порт ${oSocks.port}.` : `Сейчас: не работает — ${oSocks.error || 'запускается'}.`;
 }
 
 async function pSaveSettings(oEvent) {
@@ -1023,8 +1077,10 @@ async function pSaveSettings(oEvent) {
       blockQueueOnPrintErrors: oEl.blockQueueOnPrintErrors.checked,
       cancelWaitingRequestsAfter: Number(oEl.cancelWaitingRequestsAfter.value),
       vendorData: oEl.vendorData.checked,
+      socksServer: oEl.socksServer.checked,
     });
     oNotify.success('Настройки сохранены');
+    setTimeout(() => pLoadSocks(), 500);
   } catch (oError) {
     oNotify.error(oError.message);
   }

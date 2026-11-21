@@ -31,6 +31,7 @@ import { pInstallCommand, pUninstallCommand } from './installer.js';
 import { pServiceCommand } from './service.js';
 import { oGetSettings } from './settings.js';
 import { fConfigureCore } from './core.js';
+import { fConfigureSocks } from './socks.js';
 import { oCreateHttpsController } from './tls.js';
 import { oInstallLayout } from './layout.js';
 import { Updater } from './update.js';
@@ -70,6 +71,7 @@ async function pServe() {
 
   // kkt-core (Штрих-М): журнал агента, версия — для статистики сервера политик.
   fConfigureCore({ fLog, sVersion: S_VERSION, sPolicyUrl: oInstallLayout()?.sPolicyUrl });
+  fConfigureSocks({ fLog });
   oGetSettings(); // срок хранения заданий — из settings.json
   const oRegistry = new Registry();
   // HTTPS — тот же обработчик на соседнем порту; включается кнопкой на странице.

@@ -4,7 +4,7 @@
 // Применяются deleteRequestsAfter (в минутах), blockQueueOnPrintErrors
 // (device.js, «Блокировка очереди») и cancelWaitingRequestsAfter — своя
 // настройка агента, у Web Requests её нет (device.js, «Срок ожидания»), и
-// vendorData — тоже своя (core.js). Остальные поля принимаются и хранятся,
+// vendorData и socksServer — тоже свои (core.js, socks.js). Остальные поля принимаются и хранятся,
 // чтобы настройки переносились между Web Requests и агентом как есть, но агент
 // по ним ещё ничего не делает: задания не проверяются при добавлении
 // (validateRequestsOnAdd), скрипты ДТО и доп. строки документа не подключены.
@@ -12,6 +12,7 @@
 import { AgentError, oQueueOptions } from './device.js';
 import { vReadJson, fWriteJson } from './store.js';
 import { fSetVendorData } from './core.js';
+import { fSetSocksServer } from './socks.js';
 
 const S_FILE = 'settings.json';
 
@@ -31,6 +32,10 @@ const O_DEFAULTS = {
   // Посцентра шлёт состояние и заводской номер в DNS-именах *.kktlab.ru,
   // core.js). По умолчанию — да (решение пользователя, 20.11.2026).
   vendorData: true,
+  // Своя настройка агента: SOCKS5-сервер для ККТ на порту 1080 (socks.js), как
+  // kktproxy Посцентра. По умолчанию — нет: ККТ выходит в сеть и через стек
+  // kkt-core или общий доступ Windows (решение пользователя, 21.11.2026).
+  socksServer: false,
 };
 
 let oSettings = null;
@@ -48,6 +53,7 @@ function fApply(oNew) {
   oQueueOptions.bBlockOnPrintErrors = oNew.blockQueueOnPrintErrors;
   oQueueOptions.nWaitLimitSec = oNew.cancelWaitingRequestsAfter;
   fSetVendorData(oNew.vendorData);
+  fSetSocksServer(oNew.socksServer, { vendorData: oNew.vendorData });
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */

@@ -46,7 +46,8 @@ import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
-import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindKkt, pShtrihSwitch } from './core.js';
+import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindKkt, pShtrihSwitch, pShtrihSetSocks } from './core.js';
+import { oSocksStatus } from './socks.js';
 import { oGetSettings, oPutSettings } from './settings.js';
 import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
@@ -149,6 +150,9 @@ function aHeldPortsOf(oRegistry) {
     name: o.name,
     com: o.connectionSettings.port === 'com' ? o.connectionSettings.com : '',
     channel: o.oHandle.sChannel || (o.connectionSettings.port === 'rndis' ? 'rndis' : ''),
+    osNet: Boolean(o.oHandle.bOsNet),
+    // Режим USB Штриха — через саму ККТ (в очереди её обращений).
+    pMode: String(o.connectionSettings.model) === 'shtrih' ? () => o.pShtrihMode(false) : null,
   }));
 }
 
@@ -337,6 +341,22 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
 
     // COM-порты ПК с распознанными ККТ (страница: выбор порта Штриха-М).
     if (sPath === '/api/v2/agentPorts' && sMethod === 'GET') return fSend(oRes, 200, await pPortList());
+    // SOCKS-сервер агента для ККТ (socks.js; включается в общих настройках).
+    if (sPath === '/api/v2/agentSocks' && sMethod === 'GET') return fSend(oRes, 200, oSocksStatus());
+    // SOCKS в Штрихе: POST { from: { channel, com? }, socks: true|false } — с
+    // перезагрузкой ККТ. Подключённую ККТ на это время отключаем, как при смене канала.
+    if (sPath === '/api/v2/agentShtrihSocks' && sMethod === 'POST') {
+      const { from: oFrom = {}, socks: bSocks } = await pReadJson(oReq);
+      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' : o.com && String(o.com) === String(oFrom.com)));
+      try {
+        if (oHeld) await oRegistry.pSetActive(oHeld.id, false);
+        return fSend(oRes, 200, { ...await pShtrihSetSocks(oFrom, Boolean(bSocks)), ...(oHeld ? { deactivated: oHeld.id } : {}) });
+      } catch (oError) {
+        if (oHeld) oRegistry.pSetActive(oHeld.id, true).catch(() => {});
+        if (oError instanceof AgentError) throw oError;
+        throw new AgentError(409, `SOCKS в ККТ не переключить: ${oError.message}`);
+      }
+    }
     // ККТ на этом ПК — окно «Добавить ККТ»: по всем каналам (COM, сеть USB);
     // порты подключённых ККТ агента не открываются — помечены heldBy.
     if (sPath === '/api/v2/agentFind' && sMethod === 'GET') return fSend(oRes, 200, await pFindKkt(aHeldPorts()));
@@ -355,6 +375,8 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         if (oHeld) await oRegistry.pSetActive(oHeld.id, false);
         return fSend(oRes, 200, { ...await pShtrihSwitch(oFrom, sTo), ...(oHeld ? { deactivated: oHeld.id } : {}) });
       } catch (oError) {
+        // Не вышло — ККТ, отключённую на это время, подключаем обратно.
+        if (oHeld) oRegistry.pSetActive(oHeld.id, true).catch(() => {});
         if (oError instanceof AgentError) throw oError;
         throw new AgentError(409, `Канал не сменить: ${oError.message}`);
       }
