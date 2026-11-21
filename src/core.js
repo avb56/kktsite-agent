@@ -178,8 +178,13 @@ const N_RNDIS_VID = 0x18D1, N_RNDIS_PID = 0x4EE4;
 const A_RNDIS_HOST = '192.168.137.1', A_RNDIS_KKT = '192.168.137.111';
 
 const pExec = (sCmd, aArgs, nTimeoutMs = 15e3) => new Promise((fResolve, fReject) =>
-  execFile(sCmd, aArgs, { timeout: nTimeoutMs, windowsHide: true }, (oError, sOut, sErr) =>
-    (oError ? fReject(new Error(String(sErr || oError.message).trim())) : fResolve(String(sOut)))));
+  execFile(sCmd, aArgs, { timeout: nTimeoutMs, windowsHide: true }, (oError, sOut, sErr) => {
+    if (!oError) return fResolve(String(sOut));
+    // Текст ошибки — stderr; нет его — что случилось, без всей командной строки.
+    const sWhy = String(sErr || '').trim()
+      || (oError.killed ? `${sCmd}: не ответил за ${nTimeoutMs / 1000} с` : `${sCmd}: код выхода ${oError.code ?? '?'}`);
+    fReject(new Error(sWhy));
+  }));
 
 let oWebUsb = null;
 function oUsbApi() {
@@ -197,22 +202,42 @@ const bRndisUsb = (o) => o?.vendorId === N_RNDIS_VID && o.productId === N_RNDIS_
 // Windows 7 (21.11.2026: Штрих в RNDIS на Win7 агент не видел вовсе). Если
 // сетевой карты нет, но устройство ККТ в системе есть (Win32_PnPEntity), —
 // Windows не поставила ему драйвер RNDIS: так и говорим.
+// Фильтр — в самом запросе WMI (WQL LIKE): перебор всех устройств в
+// PowerShell 2.0 Windows 7 не укладывался в 15 с (21.11.2026). Скрипт —
+// через -EncodedCommand (UTF-16LE, base64): кавычки фильтра не зависят от
+// разбора командной строки.
 const S_RNDIS_WMI = [
   "$ErrorActionPreference = 'SilentlyContinue'",
-  "Get-WmiObject Win32_NetworkAdapter | Where-Object { $_.PNPDeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { 'net|' + $_.NetConnectionID }",
-  "Get-WmiObject Win32_PnPEntity | Where-Object { $_.DeviceID -match 'VID_18D1&PID_4EE4' } | ForEach-Object { 'pnp|' + $_.ConfigManagerErrorCode + '|' + $_.Name }",
-].join('; ');
+  `Get-WmiObject Win32_NetworkAdapter -Filter "PNPDeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'net|' + $_.NetConnectionID }`,
+  `Get-WmiObject Win32_PnPEntity -Filter "DeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'pnp|' + $_.ConfigManagerErrorCode + '|' + $_.Name }`,
+  'exit 0',
+].join('\r\n');
+const N_RNDIS_WMI_TIMEOUT_MS = 60e3;
+const N_RNDIS_CACHE_MS = 10e3;
 
 let sRndisWarned = '';
-async function pFindRndisWindows() {
+let pRndisRun = null; // идущий поиск — страница спрашивает каждые 15 с
+let oRndisLast = { nAt: 0, aFound: [] };
+function pFindRndisWindows() {
+  if (Date.now() - oRndisLast.nAt < N_RNDIS_CACHE_MS) return Promise.resolve(oRndisLast.aFound);
+  pRndisRun ??= pFindRndisWmi().then((aFound) => {
+    oRndisLast = { nAt: Date.now(), aFound };
+    return aFound;
+  }).finally(() => { pRndisRun = null; });
+  return pRndisRun;
+}
+
+async function pFindRndisWmi() {
   let sOut = '';
   try {
-    sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', S_RNDIS_WMI]);
+    const sEncoded = Buffer.from(S_RNDIS_WMI, 'utf16le').toString('base64');
+    sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', sEncoded], N_RNDIS_WMI_TIMEOUT_MS);
   } catch (oError) {
     if (sRndisWarned !== oError.message) fLog(`RNDIS: поиск сетевой карты ККТ не удался — ${oError.message}`);
     sRndisWarned = oError.message;
     return [];
   }
+  sRndisWarned = '';
   const aLines = sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((s) => s.split('|'));
   const aNet = aLines.filter((a) => a[0] === 'net' && a[1]).map((a) => a[1]);
   if (aNet.length) {
