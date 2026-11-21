@@ -278,14 +278,27 @@ export async function pRndisToCom(oFound) {
   const { KKT } = oCore();
   let oPort;
   if (oFound.sAdapter) {
-    // Адрес шлюза ККТ — сетевой карте; уже задан — netsh ответит ошибкой, не беда.
-    await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0']).catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+    // Адрес из сети ККТ у карты уже есть (её настроили для утилиты или драйвера
+    // производителя) — не трогаем: смена адреса оборвала бы их связь с ККТ.
+    // Нет — ставим адрес шлюза ККТ. Адреса — цифрами из вывода netsh: от языка
+    // Windows не зависят.
+    const sShow = await pExec('netsh', ['interface', 'ipv4', 'show', 'addresses', `name=${oFound.sAdapter}`]).catch(() => '');
+    const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+    if (aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
+      fLog(`RNDIS: у сетевой карты «${oFound.sAdapter}» уже есть адрес сети ККТ — не меняю`);
+    } else {
+      await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
+        .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+    }
     let oSocket = null;
     for (let n = 0; n < 10 && !oSocket; n += 1) {
       oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
       if (!oSocket) await new Promise((f) => setTimeout(f, 1500));
     }
-    if (!oSocket) throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778)`);
+    if (!oSocket) {
+      throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778). Если с ней сейчас работает драйвер или утилита`
+        + ' производителя (тест драйвера, ККТ config, kktproxy) — закройте их: ККТ может не принять второе подключение по сети');
+    }
     oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' });
   } else {
     try { fDetachKernel(); } catch (oError) { fLog(`RNDIS: драйвер ядра — ${oError.message}`); }
