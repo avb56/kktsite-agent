@@ -983,6 +983,43 @@ async function pCopy(oCode) {
   }
 }
 
+function fRenderPolicy(oPolicy) {
+  $('policy-state').textContent = oPolicy.license
+    ? `Ключ лицензии: ${oPolicy.license}`
+    : 'Ключа лицензии нет — новые ККТ работают в демо-режиме';
+  $('policy-url').textContent = oPolicy.policyUrl || 'не задан';
+  $('policy-clear').hidden = !oPolicy.license;
+}
+
+async function pLoadPolicy() {
+  try {
+    fRenderPolicy(await pApi('GET', 'agentPolicy'));
+  } catch (oError) {
+    $('policy-state').textContent = oError.message;
+  }
+}
+
+async function pSavePolicy(sLicense) {
+  try {
+    fRenderPolicy(await pApi('PUT', 'agentPolicy', { license: sLicense }));
+    $('policy-license').value = '';
+    oNotify.success(sLicense ? 'Ключ лицензии сохранён' : 'Ключ лицензии убран — демо-режим');
+  } catch (oError) {
+    oNotify.error(oError.message);
+  }
+}
+
+function fInitPolicy() {
+  $('policy-form').addEventListener('submit', (oEvent) => {
+    oEvent.preventDefault();
+    const sLicense = $('policy-license').value.trim();
+    if (!sLicense) return oNotify.error('Вставьте ключ лицензии из личного кабинета');
+    pSavePolicy(sLicense);
+  });
+  $('policy-clear').addEventListener('click', () => pSavePolicy(''));
+  pLoadPolicy();
+}
+
 function fInitKassaUrl() {
   $('kassa-url').textContent = sKassaUrl('');
   $('kassa-host').textContent = location.hostname;
@@ -994,6 +1031,7 @@ function fInitKassaUrl() {
 async function pStart() {
   fInitTabs();
   fInitKassaUrl();
+  fInitPolicy();
   $('add-device').addEventListener('click', () => fOpenDeviceDialog(null).catch((oError) => oNotify.error(oError.message)));
   $('device-form').addEventListener('submit', pSaveDevice);
   $('device-form').elements.port.addEventListener('change', fShowPortFields);

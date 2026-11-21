@@ -77,7 +77,20 @@ const pResolveHost = (sHost) => new Promise((fResolve, fReject) =>
   dns.lookup(sHost, { family: 4 }, (oError, sIp) => (oError ? fReject(oError) : fResolve(sIp))));
 
 /** Ключ лицензии и адрес сервера политик (от кассы). */
-export const oPolicyAccess = () => ({ license: '', policyUrl: process.env.KKT_AGENT_POLICY_URL || '', ...vReadJson(S_POLICY_FILE, {}) });
+let sDefaultPolicyUrl = '';
+/**
+ * Ключ лицензии и адрес сервера политик. Адрес: присланный кассой (или
+ * введённый на странице агента) → KKT_AGENT_POLICY_URL → из сборки
+ * (package-info.json, scripts/pack.mjs). Так агент получает разрешение и без
+ * кассы: без ключа — демо по РНМ.
+ */
+export function oPolicyAccess() {
+  const oSaved = vReadJson(S_POLICY_FILE, {});
+  return {
+    license: oSaved.license || '',
+    policyUrl: oSaved.policyUrl || process.env.KKT_AGENT_POLICY_URL || sDefaultPolicyUrl,
+  };
+}
 
 function fApplyConfig() {
   if (!oLib) return;
@@ -98,9 +111,10 @@ function fApplyConfig() {
   });
 }
 
-export function fConfigureCore({ fLog: fNewLog, sVersion } = {}) {
+export function fConfigureCore({ fLog: fNewLog, sVersion, sPolicyUrl } = {}) {
   if (fNewLog) fLog = fNewLog;
   if (sVersion) sAgentVersion = sVersion;
+  if (sPolicyUrl) sDefaultPolicyUrl = sPolicyUrl;
   fApplyConfig();
 }
 
@@ -110,7 +124,7 @@ export function fSetVendorData(bOn) {
   fApplyConfig();
 }
 
-/** Касса прислала ключ лицензии и адрес сервера политик. */
+/** Ключ лицензии и адрес сервера политик — от кассы или со страницы агента (пустой ключ — демо). */
 export function oPutPolicyAccess({ license, policyUrl } = {}) {
   const oNow = oPolicyAccess();
   const oNext = {

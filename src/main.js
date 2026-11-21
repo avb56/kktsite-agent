@@ -69,7 +69,7 @@ async function pServe() {
   if (oDriver.warning) fLog(`ВНИМАНИЕ: ${oDriver.warning}`);
 
   // kkt-core (Штрих-М): журнал агента, версия — для статистики сервера политик.
-  fConfigureCore({ fLog, sVersion: S_VERSION });
+  fConfigureCore({ fLog, sVersion: S_VERSION, sPolicyUrl: oInstallLayout()?.sPolicyUrl });
   oGetSettings(); // срок хранения заданий — из settings.json
   const oRegistry = new Registry();
   // HTTPS — тот же обработчик на соседнем порту; включается кнопкой на странице.

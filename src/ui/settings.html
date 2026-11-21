@@ -74,6 +74,22 @@
         <code>http://логин:пароль@…</code></p>
     </section>
 
+    <section class="panel" data-pane="connect" role="tabpanel" aria-labelledby="tab-connect">
+      <h2>Лицензия</h2>
+      <p>Разрешение на работу ККТ Штрих-М агент получает сам у сервера политик. Без ключа лицензии новая
+        ККТ работает в демо-режиме. С ключом разрешение идёт от вашей учётной записи: ключ — в личном кабинете.
+        Касса, которая работает через этот агент, передаёт ему ключ сама.</p>
+      <p class="state" id="policy-state"></p>
+      <form id="policy-form" class="inline-form" autocomplete="off">
+        <label>Ключ лицензии
+          <input name="license" id="policy-license" maxlength="128" placeholder="lic_…">
+        </label>
+        <button type="submit">Сохранить</button>
+        <button type="button" id="policy-clear">Убрать ключ</button>
+      </form>
+      <p class="muted">Сервер политик: <code id="policy-url"></code></p>
+    </section>
+
     <section class="panel" data-pane="piot" role="tabpanel" aria-labelledby="tab-piot">
       <h2>Модуль проверки кодов маркировки (ТС ПИоТ)</h2>
       <p>Касса проверяет коды через этот сервер: из браузера к модулю напрямую не достучаться.

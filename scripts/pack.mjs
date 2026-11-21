@@ -3,7 +3,7 @@
 // .github/workflows/agent-release.yml, по машине на платформу: обёртка
 // драйвера — нативный модуль, собирается под свою ОС и node).
 //
-//   node scripts/pack.mjs [--out dist] [--version 0.2.0] [--update-url https://…/agent/]
+//   node scripts/pack.mjs [--out dist] [--version 0.2.0] [--update-url https://…/agent/] [--policy-url https://…/api/policy/lease]
 //                         [--node-binary <node>] [--platform <ключ>] [--bundle-node12]
 //
 // Сборка для Windows 7 (Node 12.22 — последний, что идёт на Win7):
@@ -37,6 +37,10 @@ const S_AGENT = fileURLToPath(new URL('..', import.meta.url));
 // Отсюда же — страница загрузки (avb56/kktsite: docs/deploy/nginx-dl.conf). Агент запоминает
 // адрес при сборке: сменили — уже установленные ходят на прежний.
 const S_DEFAULT_UPDATE_URL = 'https://dl.kktsite.ru/agent/';
+// Сервер политик по умолчанию: агент сам, без кассы, получает разрешение для
+// ККТ kkt-core (без ключа лицензии — демо по РНМ). Пока — сервис дева
+// (21.11.2026: домены сервисов прода и дева будут пересмотрены).
+const S_DEFAULT_POLICY_URL = 'https://srv.orenkontur.ru/api/policy/lease';
 
 function oArgs(aArgs) {
   const o = {};
@@ -44,7 +48,7 @@ function oArgs(aArgs) {
     if (aArgs[n] === '--bundle-node12') { o.bundle = true; continue; }
     const aMatch = /^--(out|version|update-url|node-binary|platform)$/.exec(aArgs[n]);
     if (!aMatch || aArgs[n + 1] === undefined) {
-      throw new Error(`Параметры: --out, --version, --update-url, --node-binary, --platform, --bundle-node12 (не понял: ${aArgs[n]})`);
+      throw new Error(`Параметры: --out, --version, --update-url, --policy-url, --node-binary, --platform, --bundle-node12 (не понял: ${aArgs[n]})`);
     }
     o[aMatch[1]] = aArgs[++n];
   }
@@ -98,6 +102,7 @@ writeFileSync(join(sApp, 'package-info.json'), JSON.stringify({
   version: sVersion,
   platform: sPlatform,
   updateUrl: oOpts['update-url'] || S_DEFAULT_UPDATE_URL,
+  policyUrl: oOpts['policy-url'] || S_DEFAULT_POLICY_URL,
   node: execFileSync(sNodeBinary, ['--version'], { encoding: 'utf8' }).trim(),
   built: new Date().toISOString(),
 }, null, 2) + '\n');

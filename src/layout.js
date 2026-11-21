@@ -29,7 +29,7 @@ export const sNodeFile = (sPlatform = process.platform) => (sPlatform === 'win32
 
 /**
  * Установка, из которой запущен агент, или null (запуск из репозитория).
- * { sRoot, sVersionDir, sVersion, sPlatform, sUpdateUrl, sCurrentNode, sCurrentMain }
+ * { sRoot, sVersionDir, sVersion, sPlatform, sUpdateUrl, sPolicyUrl, sCurrentNode, sCurrentMain }
  */
 export function oInstallLayout(sAppDir = S_APP_DIR) {
   const sInfo = join(sAppDir, 'package-info.json');
@@ -46,6 +46,7 @@ export function oInstallLayout(sAppDir = S_APP_DIR) {
     sVersion: oInfo.version,
     sPlatform: oInfo.platform,
     sUpdateUrl: process.env.KKT_AGENT_UPDATE_URL || oInfo.updateUrl || '',
+    sPolicyUrl: oInfo.policyUrl || '',
     sCurrentNode: join(sRoot, 'current', 'node', sNodeFile()),
     sCurrentMain: join(sRoot, 'current', 'app', 'src', 'main.js'),
   };
