@@ -46,7 +46,7 @@ import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
 import { oMapping } from './mapping.js';
-import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindRndis, pRndisToCom } from './core.js';
+import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindKkt, pShtrihSwitch } from './core.js';
 import { oGetSettings, oPutSettings } from './settings.js';
 import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
@@ -142,7 +142,18 @@ async function pReadJson(oReq) {
  * контроллер HTTPS из tls.js, oUpdater — самообновление из update.js, oRestart —
  * { bCan, pRestart } перезапуск сервера службой (main.js); все необязательны.
  */
+/** Порты, которые держат подключённые ККТ агента: [{ id, name, com, channel }]. */
+function aHeldPortsOf(oRegistry) {
+  return [...oRegistry.mDevices.values()].filter((o) => o.oHandle).map((o) => ({
+    id: o.id,
+    name: o.name,
+    com: o.connectionSettings.port === 'com' ? o.connectionSettings.com : '',
+    channel: o.oHandle.sChannel || (o.connectionSettings.port === 'rndis' ? 'rndis' : ''),
+  }));
+}
+
 export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttps = null, oUpdater = null, oRestart = null }) {
+  const aHeldPorts = () => aHeldPortsOf(oRegistry);
   async function pRoute(oReq, oRes, oUrl) {
     const sPath = oUrl.pathname.replace(/\/+$/, '');
     const sMethod = oReq.method;
@@ -326,20 +337,26 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
 
     // COM-порты ПК с распознанными ККТ (страница: выбор порта Штриха-М).
     if (sPath === '/api/v2/agentPorts' && sMethod === 'GET') return fSend(oRes, 200, await pPortList());
-    // Штрих-М в режиме сетевой карты USB (RNDIS): GET — найденные; POST { id } —
-    // перевести в USB-COM (VCOM) и перезагрузить (core.js).
-    if (sPath === '/api/v2/agentRndis') {
-      const aFound = await pFindRndis();
-      if (sMethod === 'GET') return fSend(oRes, 200, aFound.map(({ id, description, bNoDriver }) => ({ id, description, ...(bNoDriver ? { bNoDriver } : {}) })));
-      if (sMethod === 'POST') {
-        const sId = (await pReadJson(oReq)).id;
-        const oFound = aFound.find((o) => !sId || o.id === sId);
-        if (!oFound) throw new AgentError(404, 'ККТ в режиме сетевой карты не найдена');
-        try {
-          return fSend(oRes, 200, await pRndisToCom(oFound));
-        } catch (oError) {
-          throw new AgentError(409, `Не перевести в USB-COM: ${oError.message}`);
+    // ККТ на этом ПК — окно «Добавить ККТ»: по всем каналам (COM, сеть USB);
+    // порты подключённых ККТ агента не открываются — помечены heldBy.
+    if (sPath === '/api/v2/agentFind' && sMethod === 'GET') return fSend(oRes, 200, await pFindKkt(aHeldPorts()));
+    // Перевести Штрих-М на другой канал: POST { from: { channel, com? }, to }.
+    // Порт держит подключённая ККТ агента — VCOM ↔ PPP через неё (без
+    // отключения), иначе её отключаем: окно настроек подключит её заново.
+    if (sPath === '/api/v2/agentSwitch' && sMethod === 'POST') {
+      const { from: oFrom = {}, to: sTo } = await pReadJson(oReq);
+      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' : o.com && String(o.com) === String(oFrom.com)));
+      try {
+        if (oHeld && oFrom.channel !== 'rndis' && sTo !== 'rndis') {
+          const oDevice = oRegistry.oGet(oHeld.id);
+          await oDevice.pShtrihMode(true, sTo === 'ppp');
+          return fSend(oRes, 200, { channel: oDevice.oHandle?.sChannel || sTo, com: oFrom.com, name: oHeld.name, heldBy: oHeld.id });
         }
+        if (oHeld) await oRegistry.pSetActive(oHeld.id, false);
+        return fSend(oRes, 200, { ...await pShtrihSwitch(oFrom, sTo), ...(oHeld ? { deactivated: oHeld.id } : {}) });
+      } catch (oError) {
+        if (oError instanceof AgentError) throw oError;
+        throw new AgentError(409, `Канал не сменить: ${oError.message}`);
       }
     }
     // Режим USB Штриха-М: GET — какой сейчас; POST { marking: true|false } —

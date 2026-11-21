@@ -33,7 +33,7 @@ const S_STORE_FILE = 'policy-store.json';
 const N_CONNECTION_LOST = 241;
 const N_NO_CONNECTION = 2;
 // Модель (connectionSettings.model) → тип порта kkt-core. Числовые модели — Атол через ДТО 10.
-export const O_CORE_MODELS = { shtrih: 'shtrih' };
+export const O_CORE_MODELS = { shtrih: 'shtrih', viki: 'viki' };
 export const bCoreModel = (vModel) => Object.prototype.hasOwnProperty.call(O_CORE_MODELS, String(vModel));
 
 let oLib = null;
@@ -324,61 +324,264 @@ function pTcpSocket(sHost, nPort) {
   });
 }
 
-/** Перевести ККТ из RNDIS в USB-COM (VCOM) и перезагрузить. oFound — из pFindRndis. */
-export async function pRndisToCom(oFound) {
-  if (oFound.bNoDriver) throw new Error('Windows не поставила ККТ драйвер RNDIS — сначала драйвер (подсказка — в плашке)');
+// ——— Открыть Штрих по каналу: RNDIS или COM-порт (VCOM / PPP) ———
+
+/** Порт kkt-core к ККТ в режиме RNDIS. oFound — из pFindRndis. */
+async function pOpenRndisPort(oFound) {
+  if (oFound.bNoDriver) throw new Error('Windows не поставила ККТ драйвер RNDIS: в диспетчере устройств — «Обновить драйвер» → «Сетевые адаптеры» → Microsoft → «Remote NDIS Compatible Device»');
   const { KKT } = oCore();
-  let oPort;
-  if (oFound.sAdapter || oFound.sHost) {
-    // Адрес из сети ККТ у карты уже есть (её настроили для утилиты или драйвера
-    // производителя) — не трогаем: смена адреса оборвала бы их связь с ККТ.
-    // Нет — ставим адрес шлюза ККТ. Адреса — цифрами из вывода netsh: от языка
-    // Windows не зависят.
-    if (oFound.sAdapter) {
-      const sShow = await pExec('netsh', ['interface', 'ipv4', 'show', 'addresses', `name=${oFound.sAdapter}`]).catch(() => '');
-      const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
-      if (aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
-        fLog(`RNDIS: у сетевой карты «${oFound.sAdapter}» уже есть адрес сети ККТ — не меняю`);
-      } else {
-        await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
-          .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
-      }
-    }
-    let oSocket = null;
-    for (let n = 0; n < 10 && !oSocket; n += 1) {
-      oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
-      if (!oSocket) await new Promise((f) => setTimeout(f, 1500));
-    }
-    if (!oSocket) {
-      throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778). Если с ней сейчас работает драйвер или утилита`
-        + ' производителя (тест драйвера, ККТ config, kktproxy) — закройте их: ККТ может не принять второе подключение по сети');
-    }
-    oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' });
-  } else {
+  if (!oFound.sAdapter && !oFound.sHost) {
+    // Linux: сеть ККТ — своим стеком kkt-core поверх USB, как у кассы в браузере.
     try { fDetachKernel(); } catch (oError) { fLog(`RNDIS: драйвер ядра — ${oError.message}`); }
-    oPort = await KKT.pInitPort(oFound.oDev);
+    return KKT.pInitPort(oFound.oDev);
   }
+  // Windows: сетевая карта ОС. Адрес из сети ККТ у неё уже есть (её настроили
+  // для утилиты или драйвера производителя) — не трогаем: смена адреса оборвала
+  // бы их связь с ККТ. Нет — ставим адрес шлюза ККТ. Адреса — цифрами из вывода
+  // netsh: от языка Windows не зависят.
+  if (oFound.sAdapter) {
+    const sShow = await pExec('netsh', ['interface', 'ipv4', 'show', 'addresses', `name=${oFound.sAdapter}`]).catch(() => '');
+    const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+    if (!aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
+      await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
+        .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+    }
+  }
+  let oSocket = null;
+  for (let n = 0; n < 10 && !oSocket; n += 1) {
+    oSocket = await pTcpSocket(A_RNDIS_KKT, 7778).catch(() => null);
+    if (!oSocket) await pSleep(1500);
+  }
+  if (!oSocket) {
+    throw new Error(`ККТ не отвечает по сети USB (${A_RNDIS_KKT}:7778). Если с ней сейчас работает драйвер или утилита`
+      + ' производителя (тест драйвера, ККТ config, kktproxy) — закройте их: ККТ может не принять второе подключение по сети');
+  }
+  return KKT.pInitPort({ oSocket, sType: 'shtrih' });
+}
+
+// PPP, только что закрытый (переподключение, смена настроек, поиск), сразу не
+// открывается: ККТ ещё не ждёт нового рукопожатия, первая попытка уходит в
+// таймаут (~13 с); через 3–4 с — открывается (стенд, 21.11.2026). Поэтому после
+// закрытия PPP — пауза, а не открылся порт — ещё раз.
+const N_PPP_REOPEN_MS = 4000;
+const mPppClosedAt = new Map(); // путь COM-порта → когда закрыт PPP
+
+/** Порт kkt-core к ККТ на COM-порту (VCOM или PPP — kkt-core определит сам). */
+async function pOpenComPort(sPath, nBaudRate = 115200, sType = 'shtrih') {
+  await pSleep(Math.max(0, (mPppClosedAt.get(sPath) ?? 0) + N_PPP_REOPEN_MS - Date.now()));
+  let oPort = await pOpenComOnce(sPath, nBaudRate, sType);
+  if (oPort.oError) {
+    await pDestroy(oPort);
+    await pSleep(N_PPP_REOPEN_MS);
+    oPort = await pOpenComOnce(sPath, nBaudRate, sType);
+  }
+  return oPort;
+}
+
+async function pOpenComOnce(sPath, nBaudRate, sType) {
+  const { KKT } = oCore();
+  // VID/PID — для определения типа; у RS-232 их нет, тогда скорость — из настроек.
+  const oFound = (await aListSerialPorts().catch(() => [])).find((o) => o.path === sPath);
+  const bUsb = Boolean(oFound?.vendorId);
+  const oSerial = oSerialPort(sPath, {
+    nBaudRate: bUsb ? 0 : nBaudRate,
+    oInfo: bUsb ? { usbVendorId: parseInt(oFound.vendorId, 16), usbProductId: parseInt(oFound.productId, 16) } : {},
+  });
+  oSerial.sType = sType;
+  const oPort = await KKT.pInitPort(oSerial);
+  oPort.sAgentPath = sPath;
+  return oPort;
+}
+
+/** Канал открытого порта Штриха: RNDIS, PPP (сокет поверх COM) или VCOM. */
+const sPortChannel = (oPort) => (oPort.oSerial ? 'ppp' : oPort.oSocket ? 'rndis' : 'vcom');
+
+const pSleep = (nMs) => new Promise((f) => setTimeout(f, nMs));
+function pDestroy(oPort) {
+  if (oPort?.oSerial && oPort.sAgentPath) mPppClosedAt.set(oPort.sAgentPath, Date.now());
+  return Promise.resolve(oPort?.pDestroy?.(false)).catch(() => {});
+}
+
+// Временная ККТ — поиск и смена канала: обмен с ОФД после заданий (kkt-core,
+// shtrih/worker.js pOfdExchange) ей не нужен, а после закрытия порта он
+// писал в журнал «Cannot call write after a stream was destroyed».
+function oTempKkt(oPort) {
+  const { KKT } = oCore();
   if (oPort.oError) throw new Error(oPort.oError.message);
-  // Временная ККТ — только перевод: обмен с ОФД после заданий (kkt-core,
-  // shtrih/worker.js pOfdExchange) ей не нужен, а после закрытия порта он
-  // писал в журнал «Cannot call write after a stream was destroyed».
   oPort.nOfdDownUntil = Number.MAX_SAFE_INTEGER;
   const oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: 'shtrih', id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
-  try {
-    await oKKT.pTaskSender({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: true, usb: 'vcom' } });
-    // Перезагрузка по сети на Win7 не сработала (21.11.2026): ККТ осталась в
-    // RNDIS до перезагрузки кнопкой — так и пишем, а не молчим.
-    let sReboot = '';
-    try {
-      const [oReboot] = await oKKT.pTaskSender({ type: 'rebootDevice' });
-      if (oReboot?.status === 'error') sReboot = oReboot.error?.description || 'ошибка';
-    } catch (oError) {
-      sReboot = oError.message;
+  return async (oTask) => {
+    const [oResult] = await oKKT.pTaskSender(oTask);
+    if (oResult?.status === 'error') throw new Error(oResult.error?.description || 'ошибка ККТ');
+    return oResult?.result ?? {};
+  };
+}
+
+// ——— Поиск ККТ ———
+
+const A_SHTRIH_CHANNELS = ['vcom', 'ppp', 'rndis'];
+
+/**
+ * ККТ на этом ПК — для окна «Добавить ККТ»: [{ model, channel, com?, name?,
+ * description, heldBy?, error? }]. model — shtrih | viki | atol; channel —
+ * vcom | ppp | rndis (Штрих), vcom (Вики), usb (Атол). Свободные порты Штриха
+ * открываем — узнать режим и заводской номер; занятые (aHeld: [{ id, name,
+ * com?, channel }] — подключённые ККТ агента) не трогаем.
+ */
+export async function pFindKkt(aHeld = []) {
+  const aOut = [];
+  for (const oPort of await pPortList()) {
+    if (!oPort.model) continue;
+    const oItem = { model: oPort.model, channel: oPort.model === 'atol' ? 'usb' : 'vcom', com: oPort.key, description: oPort.description };
+    const oHeld = aHeld.find((o) => o.com && sPortPath(o.com) === oPort.path);
+    if (oHeld) Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, channel: oHeld.channel || oItem.channel });
+    else if (oPort.model === 'shtrih') {
+      let oKkt = null;
+      try {
+        oKkt = await pOpenComPort(oPort.path);
+        if (oKkt.oError) throw oKkt.oError;
+        Object.assign(oItem, { channel: sPortChannel(oKkt), name: oKkt.sName });
+      } catch (oError) {
+        oItem.error = oError.message;
+      } finally {
+        await pDestroy(oKkt);
+      }
     }
-    fLog(`ККТ ${oPort.sName}: USB — COM-порт (VCOM)` + (sReboot ? `; перезагрузка не прошла (${sReboot}) — перезагрузите ККТ кнопкой` : ', перезагрузка'));
-    return { name: oPort.sName, ...(sReboot ? { rebootFailed: sReboot } : {}) };
+    aOut.push(oItem);
+  }
+  for (const oFound of await pFindRndis()) {
+    const oItem = { model: 'shtrih', channel: 'rndis', description: oFound.description };
+    const oHeld = aHeld.find((o) => o.channel === 'rndis');
+    if (oHeld) Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name });
+    else if (oFound.bNoDriver) oItem.error = oFound.description;
+    else {
+      let oKkt = null;
+      try {
+        oKkt = await pOpenRndisPort(oFound);
+        if (oKkt.oError) throw oKkt.oError;
+        oItem.name = oKkt.sName;
+      } catch (oError) {
+        oItem.error = oError.message;
+      } finally {
+        await pDestroy(oKkt);
+      }
+    }
+    aOut.push(oItem);
+  }
+  return aOut;
+}
+
+// ——— Смена канала Штриха ———
+//
+// Каналы — режим USB ККТ (Посцентр): таблица 21 поле 9 — VCOM/RNDIS (после
+// перезагрузки), поле 1 — PPP (3; действует сразу: порт тут же говорит другим
+// протоколом), таблица 16 поле 19 — SOCKS (после перезагрузки). Стенд,
+// 20–21.11.2026; подробнее — у pSwitchShtrih (device.js).
+
+/** Открыть Штрих на канале oFrom ({ channel, com? }) — порт kkt-core. */
+async function pOpenChannel(oFrom) {
+  if (oFrom.channel === 'rndis') {
+    const oFound = (await pFindRndis()).find((o) => !o.bNoDriver);
+    if (!oFound) throw new Error('ККТ в режиме сетевой карты USB (RNDIS) не найдена');
+    return pOpenRndisPort(oFound);
+  }
+  if (!oFrom.com) throw new Error('Не выбран COM-порт ККТ');
+  return pOpenComPort(sPortPath(oFrom.com));
+}
+
+/** Ждать, пока ККТ не появится на канале sTo; до nTotalMs. Нашлась — { channel, com?, name }. */
+async function pWaitChannel(sTo, nTotalMs, nFirstMs = 0) {
+  const nUntil = Date.now() + nTotalMs;
+  await pSleep(nFirstMs);
+  while (Date.now() < nUntil) {
+    const oFound = (await pFindKkt().catch(() => [])).find((o) => o.model === 'shtrih' && o.channel === sTo && !o.error);
+    if (oFound) return oFound;
+    await pSleep(3000);
+  }
+  return null;
+}
+
+/**
+ * Перевести Штрих с канала oFrom ({ channel, com? }) на sTo (vcom | ppp |
+ * rndis). Порт ККТ должен быть свободен. Возвращает { channel, com?, name }
+ * — где ККТ теперь, или { rebootNeeded: true }, если режим записан, а
+ * перезагрузиться сама ККТ не смогла.
+ */
+export async function pShtrihSwitch(oFrom, sTo) {
+  if (!A_SHTRIH_CHANNELS.includes(sTo) || !A_SHTRIH_CHANNELS.includes(oFrom?.channel)) throw new Error('Канал — vcom, ppp или rndis');
+  if (oFrom.channel === sTo) throw new Error('ККТ уже на этом канале');
+  const fSay = (s) => fLog(`Смена канала Штриха ${oFrom.channel} → ${sTo}: ${s}`);
+  let oPort = await pOpenChannel(oFrom);
+  try {
+    let fRun = oTempKkt(oPort);
+    const oMode = (await fRun({ type: 'getShtrihUsbMode' })).shtrihUsbMode ?? {};
+    const pReboot = async () => {
+      try {
+        await fRun({ type: 'rebootDevice' });
+        fSay(`${oPort.sName}: режим записан, перезагрузка`);
+        return true;
+      } catch (oError) {
+        fSay(`${oPort.sName}: режим записан, перезагрузка не прошла (${oError.message}) — перезагрузите ККТ кнопкой`);
+        return false;
+      }
+    };
+    let bRebooted;
+
+    if (sTo === 'rndis') {
+      // SOCKS — чтобы ККТ ходила в ОФД и ОИСМ через агента. Из PPP: поле 1
+      // пишется последним, после него порт — уже обычный VCOM: перезагрузку
+      // шлём, открыв его заново.
+      await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { usb: 'rndis', socks: true, ...(oFrom.channel === 'ppp' ? { ppp: 0 } : {}) } });
+      if (oFrom.channel === 'ppp') {
+        await pDestroy(oPort);
+        oPort = null;
+        await pSleep(4000);
+        for (let n = 0; n < 8 && !oPort; n += 1) {
+          oPort = await pOpenComPort(sPortPath(oFrom.com)).catch(() => null);
+          if (oPort?.oError) { await pDestroy(oPort); oPort = null; }
+          if (!oPort) await pSleep(2000);
+        }
+        if (!oPort) throw new Error('после выключения PPP ККТ не ответила по VCOM — перезагрузите её кнопкой');
+        fRun = oTempKkt(oPort);
+      }
+      bRebooted = await pReboot();
+    } else if (oFrom.channel === 'rndis') {
+      // В PPP после загрузки: задача PPP прошивки стартует только при ней.
+      await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { usb: 'vcom', socks: sTo === 'ppp', ppp: sTo === 'ppp' ? 3 : 0 } });
+      bRebooted = await pReboot();
+    } else if (sTo === 'vcom') {
+      await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: false, ppp: 0 } });
+      fSay(`${oPort.sName}: PPP выключен`);
+      bRebooted = true;
+    } else {
+      // VCOM → PPP: у ККТ, загруженной без PPP, поле 1 действует только после
+      // перезагрузки, а перезагрузить командой уже нельзя (порт молчит) —
+      // сторожевой таймер интерфейса на 1 минуту: ККТ перезагрузится сама.
+      // Потом таймер — как был.
+      await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { watchdog: 1, socks: true, ppp: 3 } });
+      fSay(`${oPort.sName}: PPP включён, ждём ККТ (до двух минут)`);
+      await pDestroy(oPort);
+      oPort = null;
+      const nAt = Date.now();
+      const oNow = await pWaitChannel('ppp', 150e3, 4000);
+      if (!oNow) throw new Error('ККТ не поднялась с PPP за две с половиной минуты — перезагрузите её кнопкой');
+      oPort = await pOpenChannel(oNow);
+      fRun = oTempKkt(oPort);
+      if ((oMode.watchdog ?? 0) !== 1) await fRun({ type: 'setShtrihUsbMode', shtrihUsbMode: { watchdog: oMode.watchdog ?? 0 } });
+      // SOCKS ККТ читает при загрузке: не было его, а PPP поднялся без
+      // перезагрузки (быстрее 20 с) — перезагрузить (по PPP можно).
+      bRebooted = true;
+      if (!oMode.socks && Date.now() - nAt < 20e3) bRebooted = await pReboot();
+    }
+    await pDestroy(oPort);
+    oPort = null;
+    if (!bRebooted) return { rebootNeeded: true };
+    const oNow = await pWaitChannel(sTo, 90e3, sTo === 'vcom' && oFrom.channel === 'ppp' ? 3000 : 10e3);
+    if (!oNow) return { rebootNeeded: true };
+    fSay(`ККТ — на канале ${sTo}`);
+    return oNow;
   } finally {
-    await Promise.resolve(oPort.pDestroy?.(false)).catch(() => {});
+    await pDestroy(oPort);
   }
 }
 
@@ -396,22 +599,24 @@ export function oCreateCoreHandle() {
   return {
     async fOpen(oConn) {
       sType = O_CORE_MODELS[String(oConn.model)];
-      const sPath = sPortPath(oConn.com);
-      if (!sPath) throw Object.assign(new Error('Не выбран COM-порт ККТ'), { code: N_NO_CONNECTION });
-      // VID/PID — для определения типа; у RS-232 их нет, тогда скорость — из настроек.
-      const oFound = (await aListSerialPorts().catch(() => [])).find((o) => o.path === sPath);
-      const bUsb = Boolean(oFound?.vendorId);
-      const oSerial = oSerialPort(sPath, {
-        nBaudRate: bUsb ? 0 : Number(oConn.baudRate) || 115200,
-        oInfo: bUsb ? { usbVendorId: parseInt(oFound.vendorId, 16), usbProductId: parseInt(oFound.productId, 16) } : {},
-      });
-      oSerial.sType = sType;
-      oPort = await KKT.pInitPort(oSerial);
+      // Штрих по сети USB (RNDIS): Linux — стек kkt-core поверх USB, Windows —
+      // сетевая карта ОС и TCP к 192.168.137.111. Иначе — COM-порт (VCOM или
+      // PPP — kkt-core различит сам).
+      if (oConn.port === 'rndis') {
+        const oFound = (await pFindRndis()).find((o) => !o.bNoDriver);
+        if (!oFound) throw Object.assign(new Error('ККТ в режиме сетевой карты USB (RNDIS) не найдена'), { code: N_NO_CONNECTION });
+        oPort = await pOpenRndisPort(oFound).catch((oError) => { throw Object.assign(new Error(oError.message), { code: N_NO_CONNECTION }); });
+      } else {
+        const sPath = sPortPath(oConn.com);
+        if (!sPath) throw Object.assign(new Error('Не выбран COM-порт ККТ'), { code: N_NO_CONNECTION });
+        oPort = await pOpenComPort(sPath, Number(oConn.baudRate) || 115200, sType);
+      }
       if (oPort.oError) {
         const oError = Object.assign(new Error(oPort.oError.message), { code: N_NO_CONNECTION });
-        await Promise.resolve(oPort.pDestroy?.(false)).catch(() => {});
+        await pDestroy(oPort);
         throw oError;
       }
+      this.sChannel = sType === 'shtrih' ? sPortChannel(oPort) : 'vcom';
       oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: sType, id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
       // Обрыв связи (PPP закрыт, ККТ перезагрузилась, чтение порта упало) —
       // сообщить устройству: оно откроет ККТ заново, не дожидаясь задания.
@@ -444,11 +649,14 @@ export function oCreateCoreHandle() {
         throw { code: typeof oError.code === 'number' ? oError.code : 500, description: oError.message };
       }
     },
+    /** Канал, на котором ККТ открыта: vcom | ppp | rndis. */
+    sChannel: '',
     fClose() {
       const o = oPort;
       oPort = null;
+      this.sChannel = '';
       oKKT = null;
-      Promise.resolve(o?.pDestroy?.(false)).catch(() => {});
+      pDestroy(o);
     },
   };
 }

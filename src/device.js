@@ -101,9 +101,13 @@ const O_OFD_CHANNELS = { none: 0, usb: 1, proto: 2, auto: 2 };
  */
 export function oDriverSettings(oConn = {}) {
   const sPort = oConn.port || 'usb';
+  // ККТ через kkt-core: COM-порт (USB VCOM, PPP или RS-232), Штрих-М — ещё
+  // сеть USB (RNDIS). Драйвер Атола их не открывает — настройки не для него.
+  if (bCoreModel(oConn.model)) {
+    if (sPort === 'com' || (sPort === 'rndis' && String(oConn.model) === 'shtrih')) return null;
+    throw new AgentError(400, String(oConn.model) === 'shtrih' ? 'Штрих-М подключается по COM-порту или сети USB (RNDIS)' : 'Эта модель подключается только по COM-порту');
+  }
   if (!(sPort in O_PORTS)) throw new AgentError(400, `Неизвестный тип подключения: ${sPort}`);
-  // ККТ через kkt-core (Штрих-М) — только по COM-порту (USB VCOM или RS-232).
-  if (bCoreModel(oConn.model) && sPort !== 'com') throw new AgentError(400, 'Эта модель подключается только по COM-порту');
   const oSettings = {
     Model: oConn.model ?? 500,
     Port: O_PORTS[sPort],
@@ -360,7 +364,7 @@ export class Device {
    * Ответ — режим после переключения ({ usb, ppp, socks }).
    */
   pShtrihMode(bSet, bMarking) {
-    if (!bCoreModel(this.connectionSettings.model)) throw new AgentError(400, 'Режим USB — только у Штриха-М');
+    if (String(this.connectionSettings.model) !== 'shtrih') throw new AgentError(400, 'Режим USB — только у Штриха-М');
     if (!this.oHandle) throw new AgentError(409, `ККТ [${this.id}] не подключена`);
     if (!bSet) return this.pSerial(async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {});
     this.bSwitching = true;
@@ -374,7 +378,7 @@ export class Device {
   async pSwitchShtrih(bMarking) {
     const pGet = async () => (await this.pProbe({ type: 'getShtrihUsbMode' }))?.shtrihUsbMode ?? {};
     const oMode = await pGet();
-    if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты USB (RNDIS) — переведите её в USB-COM кнопкой вверху страницы');
+    if (oMode.usb === 'rndis') throw new AgentError(409, 'ККТ в режиме сетевой карты USB (RNDIS) — канал меняется в «Настроить»');
     if (bMarking ? oMode.ppp === 3 && oMode.socks : oMode.ppp === 0) return oMode;
     const fSay = (s) => this.fLog?.(`ККТ [${this.id}] ${this.name}: ${s}`);
 

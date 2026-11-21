@@ -176,7 +176,7 @@ function oTargetUser(oArgs) {
 }
 
 // Штрих-М (Посцентр) в режиме сетевой карты USB (RNDIS, 18d1:4ee4, NXP):
-// агент переводит его в USB-COM сам, по USB (core.js, pRndisToCom) — без
+// агент открывает его сам, по USB (core.js, pOpenRndisPort) — без
 // root, но с доступом к устройству. Телефоны в режиме модема (тот же код
 // Google) не трогаем: только производитель NXP.
 const S_UDEV_PATH = '/etc/udev/rules.d/91-kktsite-agent.rules';

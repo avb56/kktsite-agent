@@ -13,14 +13,18 @@ let aDevices = [];
 const mChecks = new Map(); // id → результат «Проверить связь»: переживает перерисовку списка
 const sBusy = new Set(); // id ККТ, по которым идёт запрос: кнопки неактивны
 const mModes = new Map(); // id Штриха-М → режим USB ({ usb, ppp, socks }) или { sError }
-const sSwitching = new Set(); // id ККТ, у которых меняется режим
 let aPorts = []; // COM-порты ПК с распознанными ККТ (agentPorts)
-const bCore = (vModel) => vModel === 'shtrih';
-// Модели на странице — две: Атол (драйвер сам узнаёт модель) и Штрих-М. Полный
-// список Web Requests остаётся в API (utils/mapping) и для уже сохранённых ККТ.
-const A_UI_MODELS = [{ key: '500', description: 'Атол' }, { key: 'shtrih', description: 'Штрих-М' }];
-const sModelName = (vModel) => A_UI_MODELS.find((o) => o.key === String(vModel))?.description ?? sDescribe('model', vModel);
-const mSwitchStart = new Map(); // id → { nAt, nSec } — начало смены связи и ожидаемая длительность
+// ККТ через kkt-core: Штрих-М и Вики; остальные (модели — числа) — Атол через ДТО.
+const bCore = (vModel) => vModel === 'shtrih' || vModel === 'viki';
+const bShtrih = (vModel) => vModel === 'shtrih';
+const O_VENDOR_NAMES = { shtrih: 'Штрих-М', viki: 'Вики' };
+const sModelName = (vModel) => O_VENDOR_NAMES[vModel] ?? (String(vModel) === '500' ? 'Атол' : sDescribe('model', vModel));
+// Каналы Штриха-М (режим USB Посцентра) — подписи на странице.
+const O_SHTRIH_CHANNELS = {
+  vcom: { title: 'USB-COM (VCOM)', hint: 'Только команды; своей сети у ККТ нет — документы не уходят в ОФД, коды не проверяются онлайн.' },
+  ppp: { title: 'USB PPP', hint: 'COM-порт с сетью внутри: ККТ сама ходит в ОФД и ОИСМ через этот компьютер.' },
+  rndis: { title: 'Сеть USB (RNDIS)', hint: 'ККТ — сетевая карта USB (192.168.137.111): ходит в ОФД и ОИСМ через этот компьютер.' },
+};
 
 async function pApi(sMethod, sPath, vBody) {
   let oRes;
@@ -130,6 +134,7 @@ function sConnectionSummary(oConn) {
   switch (oConn.port) {
     case 'usb': aParts.push(oConn.usbDevice && oConn.usbDevice !== 'auto' ? `USB ${oConn.usbDevice}` : 'USB, автоматически'); break;
     case 'com': aParts.push(bCore(oConn.model) ? (oConn.com || 'COM ?') : `${oConn.com || 'COM ?'}, ${oConn.baudRate} бод`); break;
+    case 'rndis': aParts.push(O_SHTRIH_CHANNELS.rndis.title); break;
     case 'tcp':
     case 'tcpip': aParts.push(`TCP/IP ${oConn.ipAddress || '?'}:${oConn.ipPort || 5555}`); break;
     case 'bluetooth': aParts.push(`Bluetooth ${oConn.mac || '?'}`); break;
@@ -265,7 +270,7 @@ async function pRefreshDevices() {
       oDevice.oQueue = await pApi('GET', `getRequestsQueueStatus?deviceID=${encodeURIComponent(oDevice.id)}`);
     } catch { /* не критично — просто не покажем */ }
     // Режим USB Штриха-М — один раз, потом после переключения: запрос идёт к ККТ.
-    if (bCore(oDevice.connectionSettings.model) && !mModes.has(oDevice.id) && !sSwitching.has(oDevice.id)) {
+    if (bShtrih(oDevice.connectionSettings.model) && !mModes.has(oDevice.id)) {
       try {
         mModes.set(oDevice.id, await pApi('GET', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`));
       } catch (oError) {
@@ -273,7 +278,7 @@ async function pRefreshDevices() {
       }
     }
   }));
-  for (const oDevice of aDevices) if (!oDevice.isActive && !sSwitching.has(oDevice.id)) mModes.delete(oDevice.id);
+  for (const oDevice of aDevices) if (!oDevice.isActive) mModes.delete(oDevice.id);
   fRenderDevices();
 }
 
@@ -299,7 +304,6 @@ function fRenderDevices() {
     q('.dot').classList.add(oDevice.isActive ? 'on' : oDevice.lastError ? 'fail' : 'off');
 
     let sState = oDevice.isActive ? 'Подключена' : 'Не подключена';
-    if (sSwitching.has(oDevice.id)) sState = 'Подключена, меняется связь — задания кассы ждут';
     if (oDevice.isActive && oDevice.oQueue) {
       sState += oDevice.oQueue.number ? `, заданий в очереди: ${oDevice.oQueue.number}` : ', очередь пуста';
     }
@@ -317,30 +321,24 @@ function fRenderDevices() {
 
     // Штрих-М: связь ККТ с ОФД и ОИСМ (режим USB) и кнопка переключения.
     oItem.dataset.id = oDevice.id;
-    const oModeButton = q('[data-act="mode"]');
-    // Пока режим меняется, ККТ на секунды «не подключена» (сервер открывает её заново) — строку не прячем.
-    if (bCore(oDevice.connectionSettings.model) && (oDevice.isActive || sSwitching.has(oDevice.id))) {
+    if (bShtrih(oDevice.connectionSettings.model) && oDevice.isActive) {
       const oMode = mModes.get(oDevice.id);
       q('.mode-row').hidden = false;
       const bNet = oMode && oMode.ppp === 3 && oMode.socks;
-      if (sSwitching.has(oDevice.id)) {
-        q('.mode').textContent = 'меняется…';
-        q('.mode-progress').hidden = false;
-        fUpdateProgress(oItem, oDevice.id);
-      } else if (!oMode) {
+      if (!oMode) {
         q('.mode').textContent = '…';
       } else if (oMode.sError) {
         q('.mode').textContent = `не прочитана: ${oMode.sError}`;
+      } else if (oMode.usb === 'rndis') {
+        // Канал меняется в окне «Настроить» — здесь только что сейчас.
+        // В ОФД и ОИСМ ККТ ходит через стек kkt-core и с SOCKS, и без него (стенд, 21.11.2026).
+        q('.mode').textContent = 'сеть USB (RNDIS), ОФД и ОИСМ — через этот компьютер';
       } else {
         q('.mode').textContent = bNet
           ? 'с ОФД и ОИСМ — через этот компьютер (USB PPP)'
-          : oMode.ppp === 3 ? 'через компьютер (USB PPP), но не включена до конца — включите заново' : 'только USB (VCOM), без выхода в сеть';
+          : oMode.ppp === 3 ? 'через компьютер (USB PPP), но не включена до конца — смените канал в «Настроить»' : 'только USB (VCOM), без выхода в сеть';
         q('.mode-hint').textContent = bNet ? ''
-          : 'Документы не уходят в ОФД, коды маркировки не проверяются онлайн: своей сети у ККТ по USB нет.';
-        oModeButton.hidden = false;
-        oModeButton.dataset.marking = bNet ? '' : '1';
-        oModeButton.textContent = bNet ? 'Отключить связь через компьютер' : 'Включить связь через компьютер';
-        if (!bNet) oModeButton.classList.add('primary');
+          : 'Документы не уходят в ОФД, коды маркировки не проверяются онлайн: своей сети у ККТ по USB нет. Канал — в «Настроить».';
       }
     }
 
@@ -367,7 +365,6 @@ async function pDeviceAction(sAct, oDevice, oButton) {
   if (sAct === 'copy') return pCopy(oButton.closest('.device').querySelector('.kassa'));
   if (sAct === 'edit') return fOpenDeviceDialog(oDevice);
   if (sAct === 'delete') return pDeleteDevice(oDevice);
-  if (sAct === 'mode') return pSwitchMode(oDevice, Boolean(oButton.dataset.marking));
 
   const sId = encodeURIComponent(oDevice.id);
   sBusy.add(oDevice.id);
@@ -388,100 +385,6 @@ async function pDeviceAction(sAct, oDevice, oButton) {
     if (sAct === 'check') mChecks.set(oDevice.id, oCheckView(null, oError.message));
     else oNotify.error(oError.message);
   } finally {
-    sBusy.delete(oDevice.id);
-    await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
-  }
-}
-
-// Полоса смены связи: сервер отвечает одним запросом в конце, поэтому — по
-// времени от ожидаемого (с перезагрузкой ККТ ~30 с, без — ~20 с), не дальше 95 %.
-function fUpdateProgress(oItem, sId) {
-  const o = mSwitchStart.get(sId);
-  if (!o) return;
-  const nSec = (Date.now() - o.nAt) / 1000;
-  oItem.querySelector('.mode-progress').value = Math.min(0.95, nSec / o.nSec);
-  oItem.querySelector('.mode-hint').textContent = `${Math.round(nSec)} с. ККТ может перезагрузиться — до двух минут. Задания кассы подождут.`;
-}
-setInterval(() => {
-  for (const sId of sSwitching) {
-    const oItem = document.querySelector(`.device[data-id="${CSS.escape(sId)}"]`);
-    if (oItem) fUpdateProgress(oItem, sId);
-  }
-}, 500);
-
-// ——— Штрих-М в режиме сетевой карты USB (RNDIS) ———
-let aRndis = [];
-let nRndisAt = 0; // начало перевода; 0 — не идёт
-
-async function pLoadRndis() {
-  if (nRndisAt) return;
-  aRndis = await pApi('GET', 'agentRndis').catch(() => []);
-  $('rndis-box').hidden = !aRndis.length;
-  $('rndis-list').textContent = aRndis.map((o) => o.description).join('; ');
-  // Без драйвера RNDIS (Windows 7) перевести нечем — только подсказка.
-  $('rndis-button').hidden = aRndis.every((o) => o.bNoDriver);
-}
-
-async function pRndisToCom() {
-  if (!aRndis.length) return;
-  nRndisAt = Date.now();
-  $('rndis-button').disabled = true;
-  $('rndis-progress').hidden = false;
-  $('rndis-hint').hidden = false;
-  const nTimer = setInterval(() => {
-    const nSec = (Date.now() - nRndisAt) / 1000;
-    $('rndis-progress').value = Math.min(0.95, nSec / 25);
-    $('rndis-hint').textContent = `${Math.round(nSec)} с. Связь с ККТ по USB, запись режима, перезагрузка.`;
-  }, 500);
-  try {
-    const oDone = await pApi('POST', 'agentRndis', { id: aRndis[0].id });
-    // Перезагрузка ККТ — ~15 с; дождаться, что COM-порт появился.
-    let bCom = false;
-    for (let n = 0; n < 30 && !bCom; n += 1) {
-      await new Promise((f) => setTimeout(f, 1000));
-      const aPorts = await pApi('GET', 'agentPorts').catch(() => []);
-      bCom = aPorts.some((o) => o.model === 'shtrih');
-    }
-    if (bCom) {
-      oNotify.success(`${oDone.name || 'ККТ'}: теперь USB-COM. Если её нет в списке — добавьте (модель «Штрих-М»); если есть — подключите и включите связь через компьютер.`);
-    } else {
-      // По сети ККТ перезагрузку не всегда принимает (Win7, 21.11.2026): режим
-      // записан, но действует после перезагрузки.
-      oNotify.warning(`${oDone.name || 'ККТ'}: режим USB-COM записан, но COM-порт не появился — перезагрузите ККТ кнопкой питания.`);
-    }
-  } catch (oError) {
-    oNotify.error(oError.message);
-  } finally {
-    clearInterval(nTimer);
-    nRndisAt = 0;
-    $('rndis-button').disabled = false;
-    $('rndis-progress').hidden = true;
-    $('rndis-hint').hidden = true;
-    await pLoadRndis();
-    await pRefreshDevices().catch(() => {});
-  }
-}
-
-async function pSwitchMode(oDevice, bMarking) {
-  const oMode = mModes.get(oDevice.id);
-  const sText = bMarking
-    ? `Включить для «${oDevice.name}» связь через этот компьютер? ККТ сама будет отправлять документы в ОФД и проверять коды маркировки в ОИСМ — через сеть компьютера (USB PPP и SOCKS). Если понадобится, ККТ перезагрузится — до двух минут.`
-    : `Отключить для «${oDevice.name}» связь через компьютер? ККТ останется только на USB (VCOM): документы перестанут уходить в ОФД, коды маркировки — проверяться онлайн.`;
-  if (!await pConfirm(sText, bMarking ? 'Включить' : 'Отключить')) return;
-  // Ожидаемая длительность: из «только USB» — до перезагрузки по таймеру (~90 с).
-  mSwitchStart.set(oDevice.id, { nAt: Date.now(), nSec: !bMarking ? 10 : oMode?.ppp !== 3 ? 90 : !oMode?.socks ? 30 : 10 });
-  sSwitching.add(oDevice.id);
-  sBusy.add(oDevice.id);
-  mModes.delete(oDevice.id);
-  fRenderDevices();
-  try {
-    mModes.set(oDevice.id, await pApi('POST', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`, { marking: bMarking }));
-    oNotify.success(`${oDevice.name}: ${bMarking ? 'связь с ОФД и ОИСМ — через этот компьютер (USB PPP)' : 'только USB (VCOM), без выхода в сеть'}`);
-  } catch (oError) {
-    oNotify.error(oError.message);
-  } finally {
-    sSwitching.delete(oDevice.id);
-    mSwitchStart.delete(oDevice.id);
     sBusy.delete(oDevice.id);
     await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
   }
@@ -548,8 +451,21 @@ async function pDeleteDevice(oDevice) {
 }
 
 // ——— добавление и настройка ККТ ———
+//
+// Сначала — какая ККТ (Атол, Вики, Штрих-М), потом канал связи радиокнопками:
+// у Атола — каналы драйвера ДТО, у Вики — COM-порт, у Штриха-М — VCOM, PPP и
+// сеть USB (RNDIS). При открытии окна сервер ищет ККТ по всем каналам
+// (agentFind): найденная ККТ выбирается сама, у каждого канала — нашлась ли на
+// нём ККТ. Хотят Штрих на другом канале, а он сейчас на этом — кнопка
+// «Перевести ККТ на этот канал» (agentSwitch): ККТ меняет режим USB и
+// перезагружается.
 
 let oEditing = null; // ККТ, которую правят; null — добавление
+let aFound = []; // найденные ККТ (agentFind)
+let bFinding = false;
+let bSwitchingChannel = false;
+let bChannelTouched = false; // канал выбрали руками — поиск его не меняет
+let sDeactivatedId = ''; // ККТ, отключённая на время перевода канала, — подключить после сохранения
 
 function fFillSelect(oSelect, aItems, vCurrent) {
   const aAll = [...aItems];
@@ -560,36 +476,211 @@ function fFillSelect(oSelect, aItems, vCurrent) {
   if (sCurrent) oSelect.value = sCurrent;
 }
 
+/** Каналы связи выбранной ККТ: [{ key, title, hint? }]. */
+function aChannelsOf(sVendor) {
+  if (sVendor === 'shtrih') return Object.entries(O_SHTRIH_CHANNELS).map(([key, o]) => ({ key, ...o }));
+  if (sVendor === 'viki') return [{ key: 'vcom', title: 'USB-COM (VCOM) или COM-порт' }];
+  return oMapping.port.filter((o) => o.key !== 'tcpip').map((o) => ({ key: o.key, title: o.description }));
+}
+
+const sVendorOf = (vModel) => (vModel === 'shtrih' || vModel === 'viki' ? vModel : 'atol');
+const sSelectedChannel = () => $('device-form').querySelector('input[name="channel"]:checked')?.value ?? '';
+
+/** ККТ, найденная на канале: Штрих — по каналу, Вики — COM-порт, Атол — по USB. */
+function oFoundOn(sVendor, sChannel) {
+  const sModel = sVendor === 'atol' ? 'atol' : sVendor;
+  return aFound.find((o) => o.model === sModel && (sVendor !== 'shtrih' || o.channel === sChannel)
+    && (sVendor !== 'atol' || sChannel === 'usb'));
+}
+
+/** Строка «что на канале» под радиокнопкой. */
+function oChannelState(sVendor, sChannel) {
+  const oP = document.createElement('p');
+  oP.className = 'channel-state muted';
+  if (bFinding) { oP.textContent = 'ищу…'; return oP; }
+  const oHere = oFoundOn(sVendor, sChannel);
+  if (oHere) {
+    const bOther = oHere.heldBy && oHere.heldBy !== oEditing?.id;
+    oP.className = `channel-state ${oHere.error ? 'error' : 'found'}`;
+    oP.textContent = oHere.error
+      ? `ККТ есть, но не ответила: ${oHere.error}`
+      : `Найдена: ${oHere.name || (oHere.model === 'atol' ? 'Атол по USB' : oHere.description.replace(/^\S+ — /, '').replace(/ — .*$/, ''))}`
+        + (oHere.com && oHere.model !== 'atol' && sChannel !== 'rndis' ? ` (${oHere.com})` : '')
+        + (bOther ? ` — уже добавлена как ККТ #${oHere.heldBy}` : '');
+    return oP;
+  }
+  oP.textContent = 'ККТ на этом канале не найдена';
+  return oP;
+}
+
+/** Штрих, найденный на другом канале, — откуда его переводить. */
+function oShtrihElsewhere(sChannel) {
+  return aFound.find((o) => o.model === 'shtrih' && o.channel !== sChannel && o.channel in O_SHTRIH_CHANNELS && !o.error
+    && (!o.heldBy || o.heldBy === oEditing?.id));
+}
+
+function fRenderChannels(bVendorChanged = false) {
+  const oForm = $('device-form');
+  const sVendor = oForm.elements.vendor.value;
+  const aChannels = aChannelsOf(sVendor);
+  let sChannel = sSelectedChannel();
+  if (bVendorChanged || !aChannels.some((o) => o.key === sChannel)) sChannel = '';
+  if (!sChannel) sChannel = (aChannels.find((o) => oFoundOn(sVendor, o.key) && !oFoundOn(sVendor, o.key).error) ?? aChannels[0])?.key ?? '';
+
+  $('channel-list').replaceChildren(...aChannels.map((oChannel) => {
+    const oBox = document.createElement('div');
+    oBox.className = 'channel';
+    const oLabel = document.createElement('label');
+    const oRadio = Object.assign(document.createElement('input'), { type: 'radio', name: 'channel', value: oChannel.key, checked: oChannel.key === sChannel });
+    oRadio.disabled = bSwitchingChannel;
+    oRadio.addEventListener('change', () => { bChannelTouched = true; fRenderChannels(); });
+    oLabel.append(oRadio, document.createTextNode(oChannel.title));
+    oBox.append(oLabel);
+    if (oChannel.hint) {
+      const oHint = Object.assign(document.createElement('p'), { className: 'channel-state muted', textContent: oChannel.hint });
+      oBox.append(oHint);
+    }
+    // Атол: что нашлось — только у USB (драйвер ищет сам); у прочих каналов не пишем.
+    if (sVendor !== 'atol' || oChannel.key === 'usb') oBox.append(oChannelState(sVendor, oChannel.key));
+    // Выбран канал, на нём ККТ нет, а Штрих есть на другом — предложить перевод.
+    if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding && !oFoundOn(sVendor, sChannel)) {
+      const oFrom = oShtrihElsewhere(sChannel);
+      if (oFrom) {
+        const oButton = Object.assign(document.createElement('button'), {
+          type: 'button', className: 'primary',
+          textContent: `Перевести ККТ с канала «${O_SHTRIH_CHANNELS[oFrom.channel].title}» на этот`,
+        });
+        oButton.disabled = bSwitchingChannel;
+        oButton.addEventListener('click', () => pSwitchChannel(oFrom, sChannel));
+        oBox.append(oButton);
+      }
+    }
+    return oBox;
+  }));
+  fShowPortFields();
+}
+
 function fShowPortFields() {
   const oForm = $('device-form');
   const oEl = oForm.elements;
-  // Штрих-М — только COM-порт; порт с ККТ — из найденных, если не выбран свой.
-  const bShtrih = bCore(oEl.model.value);
-  if (bShtrih) {
-    oEl.port.value = 'com';
-    const sFound = aPorts.find((o) => o.model === 'shtrih')?.key;
-    if (sFound && !aPorts.some((o) => o.key === oEl.com.value && o.model === 'shtrih')) oEl.com.value = sFound;
-  }
-  oEl.port.disabled = bShtrih;
-  for (const oItem of oForm.querySelectorAll('[data-core]')) oItem.hidden = (oItem.dataset.core === 'yes') !== bShtrih;
-  let sPort = oEl.port.value;
+  const sVendor = oEl.vendor.value;
+  const sChannel = sSelectedChannel();
+  // Порт формы: у Атола — канал как есть; у Вики и Штриха — COM, кроме RNDIS.
+  let sPort = sVendor === 'atol' ? sChannel : sChannel === 'rndis' ? 'rndis' : 'com';
   if (sPort === 'tcpip') sPort = 'tcp';
+  for (const oItem of oForm.querySelectorAll('[data-vendor]')) oItem.hidden = oItem.dataset.vendor !== sVendor;
   for (const oLabel of oForm.querySelectorAll('[data-port]')) oLabel.hidden = oLabel.dataset.port !== sPort;
-  // Скорость у USB VCOM ни на что не влияет — у Штриха на найденном USB-порту не спрашиваем.
-  if (bShtrih && aPorts.some((o) => o.key === oEl.com.value && o.model === 'shtrih')) oEl.baudRate.closest('label').hidden = true;
+  // COM-порт с ККТ — из найденной на канале, если свой не выбран.
+  if (sPort === 'com' && sVendor !== 'atol') {
+    const oHere = oFoundOn(sVendor, sChannel);
+    const bKnown = aPorts.some((o) => o.key === oEl.com.value && o.model === sVendor);
+    if (oHere?.com && !bKnown) oEl.com.value = oHere.com;
+  }
+  // Скорость у USB VCOM ни на что не влияет — у Вики и Штриха на найденном USB-порту не спрашиваем.
+  if (sVendor !== 'atol' && aPorts.some((o) => o.key === oEl.com.value && o.model === sVendor)) oEl.baudRate.closest('label').hidden = true;
+}
+
+function fSetFindState(sText) {
+  $('find-state').textContent = sText;
+}
+
+/** Поиск ККТ по всем каналам; найденная — выбирается, если канал не выбран руками. */
+async function pFindKkt() {
+  if (bFinding) return;
+  bFinding = true;
+  $('find-again').disabled = true;
+  fSetFindState('Ищу ККТ на портах и в сети USB…');
+  fRenderChannels();
+  try {
+    [aFound, aPorts] = await Promise.all([pApi('GET', 'agentFind'), pApi('GET', 'agentPorts').catch(() => [])]);
+  } catch (oError) {
+    aFound = [];
+    fSetFindState(`Поиск не удался: ${oError.message}`);
+  } finally {
+    bFinding = false;
+    $('find-again').disabled = false;
+  }
+  $('com-list').replaceChildren(...(aPorts.length ? aPorts : oMapping.com).map((o) => new Option(o.description, o.key)));
+  if (!$('device-dialog').open) return;
+  const aReady = aFound.filter((o) => !o.error);
+  if (aFound.length || !$('find-state').textContent.startsWith('Поиск не удался')) {
+    fSetFindState(aReady.length ? `Найдено ККТ: ${aReady.length}` : 'ККТ не найдены — проверьте кабель и питание, затем «Искать снова»');
+  }
+  // Новая ККТ: выбрать найденную — сначала Штрих по сети USB (сеть уже настроена,
+  // менять в ККТ ничего не нужно), потом PPP, VCOM, Вики, Атол.
+  if (!oEditing && !bChannelTouched) {
+    const A_ORDER = [['shtrih', 'rndis'], ['shtrih', 'ppp'], ['shtrih', 'vcom'], ['viki', 'vcom'], ['atol', 'usb']];
+    const aBest = A_ORDER.find(([sModel, sChannel]) => aReady.some((o) => o.model === sModel && o.channel === sChannel && !o.heldBy));
+    if (aBest) {
+      const oEl = $('device-form').elements;
+      oEl.vendor.value = aBest[0];
+      fRenderChannels(true);
+      const oRadio = $('device-form').querySelector(`input[name="channel"][value="${aBest[1]}"]`);
+      if (oRadio) oRadio.checked = true;
+      const oHere = aReady.find((o) => o.model === aBest[0] && o.channel === aBest[1]);
+      if (oHere?.com) oEl.com.value = oHere.com;
+      if (!oEl.name.value.trim() && oHere?.name) oEl.name.value = oHere.name.replace(/, з\/н:.*$/, '');
+    }
+  }
+  fRenderChannels();
+}
+
+/** Перевести Штрих на канал sTo (agentSwitch): до двух с половиной минут. */
+async function pSwitchChannel(oFrom, sTo) {
+  const sFrom = O_SHTRIH_CHANNELS[oFrom.channel].title;
+  const sToTitle = O_SHTRIH_CHANNELS[sTo].title;
+  const sHeld = oFrom.heldBy ? ` ККТ #${oFrom.heldBy} на время перевода отключится — сохраните окно, и она подключится заново.` : '';
+  if (!await pConfirm(`Перевести ККТ «${oFrom.name || 'Штрих-М'}» с канала «${sFrom}» на «${sToTitle}»? ККТ сменит режим USB и, скорее всего, перезагрузится — до двух с половиной минут.${sHeld}`, 'Перевести')) return;
+  bSwitchingChannel = true;
+  $('device-save').disabled = true;
+  $('find-again').disabled = true;
+  const nAt = Date.now();
+  const nExpect = sTo === 'ppp' && oFrom.channel === 'vcom' ? 120 : 40;
+  const oProgress = $('switch-progress');
+  oProgress.hidden = false;
+  const nTimer = setInterval(() => {
+    const nSec = (Date.now() - nAt) / 1000;
+    oProgress.value = Math.min(0.95, nSec / nExpect);
+    fSetFindState(`Перевожу ККТ на «${sToTitle}»: ${Math.round(nSec)} с. ККТ может перезагрузиться.`);
+  }, 500);
+  fRenderChannels();
+  try {
+    const oNow = await pApi('POST', 'agentSwitch', { from: { channel: oFrom.channel, com: oFrom.com }, to: sTo });
+    if (oNow.rebootNeeded) {
+      oNotify.warning(`Режим «${sToTitle}» записан, но ККТ не перезагрузилась сама — перезагрузите её кнопкой питания, потом «Искать снова».`);
+    } else {
+      oNotify.success(`ККТ теперь на канале «${sToTitle}»`);
+    }
+    if (oEditing) mModes.delete(oEditing.id);
+    if (oNow.deactivated) {
+      sDeactivatedId = oNow.deactivated;
+      await pRefreshDevices().catch(() => {});
+    }
+  } catch (oError) {
+    oNotify.error(oError.message);
+  } finally {
+    clearInterval(nTimer);
+    oProgress.hidden = true;
+    bSwitchingChannel = false;
+    $('device-save').disabled = false;
+  }
+  await pFindKkt();
 }
 
 async function fOpenDeviceDialog(oDevice) {
   oEditing = oDevice;
+  bChannelTouched = Boolean(oDevice);
+  sDeactivatedId = '';
   const oForm = $('device-form');
   let oBase = oDevice;
   if (!oBase) {
     oBase = await pApi('GET', 'utils/deviceParametersStruct');
     // Web Requests предлагает COM1 и 1200 бод; ККТ Атола по умолчанию — 115200.
     oBase.connectionSettings.baudRate = 115200;
-    oBase.connectionSettings.com = oMapping.com[0]?.key ?? '';
+    oBase.connectionSettings.com = '';
   }
   const oConn = oBase.connectionSettings;
+  const sVendor = sVendorOf(oConn.model);
 
   $('device-dialog-title').textContent = oDevice ? `Настройка ККТ #${oDevice.id}` : 'Новая ККТ';
   oForm.reset();
@@ -597,17 +688,11 @@ async function fOpenDeviceDialog(oDevice) {
   oForm.elements.name.value = oBase.name || '';
   oForm.elements.id.value = oDevice ? oDevice.id : '';
   oForm.elements.id.disabled = Boolean(oDevice);
-  // Сохранённая модель Атола, которой нет среди двух, — показываем её как есть.
-  const aModels = A_UI_MODELS.some((o) => o.key === String(oConn.model))
-    ? A_UI_MODELS : [...A_UI_MODELS, { key: String(oConn.model), description: sDescribe('model', oConn.model) }];
-  fFillSelect(oForm.elements.model, aModels, oConn.model);
-  fFillSelect(oForm.elements.port, oMapping.port, oConn.port);
+  oForm.elements.vendor.value = sVendor;
+  fFillSelect(oForm.elements.model, oMapping.model, sVendor === 'atol' ? oConn.model : 500);
   fFillSelect(oForm.elements.usbDevice, oMapping.usbDevice, oConn.usbDevice || 'auto');
   fFillSelect(oForm.elements.baudRate, oMapping.baudRate, oConn.baudRate);
   fFillSelect(oForm.elements.ofdChannel, oMapping.ofdChannel, oConn.ofdChannel || 'auto');
-  // Порты — найденные на ПК (с подписью, что за ККТ); не вышло — из mapping.
-  aPorts = await pApi('GET', 'agentPorts').catch(() => []);
-  $('com-list').replaceChildren(...(aPorts.length ? aPorts : oMapping.com).map((o) => new Option(o.description, o.key)));
   oForm.elements.com.value = oConn.com ?? '';
   oForm.elements.ipAddress.value = oConn.ipAddress || '';
   oForm.elements.ipPort.value = oConn.ipPort || '';
@@ -618,23 +703,37 @@ async function fOpenDeviceDialog(oDevice) {
   $('activate-row').hidden = Boolean(oDevice);
   oForm.elements.activate.checked = true;
   $('device-error').hidden = true;
+  aFound = [];
+  // Канал: Атол — порт; Штрих — rndis по порту, иначе PPP или VCOM по режиму ККТ.
+  const sChannel = sVendor === 'atol' ? (oConn.port === 'tcpip' ? 'tcp' : oConn.port)
+    : sVendor === 'shtrih' ? (oConn.port === 'rndis' ? 'rndis' : mModes.get(oDevice?.id)?.ppp === 3 ? 'ppp' : 'vcom') : 'vcom';
+  $('channel-list').replaceChildren();
+  fRenderChannels(true);
+  const oRadio = oForm.querySelector(`input[name="channel"][value="${sChannel}"]`);
+  if (oRadio) oRadio.checked = true;
   fShowPortFields();
   $('device-dialog').showModal();
   oForm.elements.name.focus();
+  pFindKkt();
 }
 
 function oConnectionFromForm() {
   const oEl = $('device-form').elements;
-  const sPort = oEl.port.value;
+  const sVendor = oEl.vendor.value;
+  const sChannel = sSelectedChannel();
+  const sPort = sVendor === 'atol' ? sChannel : sChannel === 'rndis' ? 'rndis' : 'com';
   const oConn = {
     ...(oEditing?.connectionSettings || {}),
-    // Модели Атола — числа (как у Web Requests), Штрих-М — 'shtrih'.
-    model: /^\d+$/.test(oEl.model.value) ? Number(oEl.model.value) : oEl.model.value,
+    // Модели Атола — числа (как у Web Requests); Штрих-М и Вики — строкой.
+    model: sVendor === 'atol' ? Number(oEl.model.value) || 500 : sVendor,
     port: sPort,
     ofdChannel: oEl.ofdChannel.value,
     accessPassword: oEl.accessPassword.value,
     userPassword: oEl.userPassword.value,
   };
+  // VCOM или PPP — режим самой ККТ, не настройка порта: не храним (иначе смена
+  // его переподключала бы ККТ). Сеть USB — свой порт rndis.
+  delete oConn.channel;
   if (sPort === 'usb') oConn.usbDevice = oEl.usbDevice.value || 'auto';
   if (sPort === 'com') Object.assign(oConn, { com: oEl.com.value.trim(), baudRate: Number(oEl.baudRate.value) });
   if (sPort === 'tcp' || sPort === 'tcpip') {
@@ -646,9 +745,8 @@ function oConnectionFromForm() {
 
 function sFormProblem() {
   const oForm = $('device-form');
-  const oEl = oForm.elements;
   // Проверяем только видимые поля: скрытые (другой канал связи) не мешают.
-  for (const oInput of oForm.querySelectorAll('input, select')) {
+  for (const oInput of oForm.querySelectorAll('input:not([type=radio]), select')) {
     if (oInput.closest('[hidden]') || oInput.disabled) continue;
     if (!oInput.checkValidity()) {
       oInput.classList.add('touched');
@@ -656,9 +754,12 @@ function sFormProblem() {
       return `${oInput.closest('label')?.firstChild?.textContent.trim() || oInput.name}: ${oInput.validationMessage}`;
     }
   }
-  if (oEl.port.value === 'com' && !oEl.com.value.trim()) return 'Укажите порт';
-  if ((oEl.port.value === 'tcp' || oEl.port.value === 'tcpip') && !oEl.ipAddress.value.trim()) return 'Укажите IP-адрес ККТ';
-  if (oEl.port.value === 'bluetooth' && !oEl.mac.value.trim()) return 'Укажите MAC-адрес';
+  if (bSwitchingChannel) return 'Дождитесь конца перевода ККТ на другой канал';
+  const oConn = oConnectionFromForm();
+  if (!sSelectedChannel()) return 'Выберите канал связи';
+  if (oConn.port === 'com' && !oConn.com) return 'Укажите порт';
+  if (oConn.port === 'tcp' && !oConn.ipAddress) return 'Укажите IP-адрес ККТ';
+  if (oConn.port === 'bluetooth' && !oConn.mac) return 'Укажите MAC-адрес';
   return '';
 }
 
@@ -679,6 +780,13 @@ async function pSaveDevice(oEvent) {
     if (oEditing) {
       await pApi('PUT', `devices/${encodeURIComponent(oEditing.id)}`, { id: oEditing.id, ...oBody });
       mChecks.delete(oEditing.id);
+      mModes.delete(oEditing.id);
+      // Отключали на время перевода канала — подключить с новыми настройками.
+      if (sDeactivatedId === oEditing.id) {
+        sDeactivatedId = '';
+        await pApi('POST', `activateDevice?deviceID=${encodeURIComponent(oEditing.id)}`)
+          .catch((oError) => oNotify.warning(`ККТ сохранена, но не подключилась: ${oError.message}`));
+      }
       $('device-dialog').close();
       oNotify.success(`ККТ «${oBody.name}» сохранена`);
     } else {
@@ -1043,13 +1151,9 @@ async function pStart() {
   fInitPolicy();
   $('add-device').addEventListener('click', () => fOpenDeviceDialog(null).catch((oError) => oNotify.error(oError.message)));
   $('device-form').addEventListener('submit', pSaveDevice);
-  $('device-form').elements.port.addEventListener('change', fShowPortFields);
-  $('device-form').elements.model.addEventListener('change', fShowPortFields);
-  $('rndis-button').addEventListener('click', pRndisToCom);
-  // ККТ в RNDIS — при открытии и раз в 15 с (на Windows поиск — PowerShell).
-  pLoadRndis();
-  setInterval(() => { if (!document.hidden) pLoadRndis(); }, 15e3);
+  $('device-form').elements.vendor.addEventListener('change', () => { bChannelTouched = true; fRenderChannels(true); });
   $('device-form').elements.com.addEventListener('change', fShowPortFields);
+  $('find-again').addEventListener('click', () => pFindKkt());
   $('device-cancel').addEventListener('click', () => $('device-dialog').close());
   $('settings-form').addEventListener('submit', pSaveSettings);
   $('update-check').addEventListener('click', (oEvent) => pUpdateAction({ action: 'check' }, oEvent.currentTarget));

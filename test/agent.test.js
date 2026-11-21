@@ -125,6 +125,15 @@ test('настройки Web Requests → настройки драйвера', 
   assert.throws(() => oDriverSettings({ port: 'pigeon' }), /Неизвестный тип подключения/);
 });
 
+test('ККТ через kkt-core: каналы Штриха-М и Вики', () => {
+  // Драйверу Атола такие настройки не нужны — проверка только канала.
+  assert.equal(oDriverSettings({ model: 'shtrih', port: 'com', com: '3' }), null);
+  assert.equal(oDriverSettings({ model: 'shtrih', port: 'rndis' }), null, 'Штрих-М — ещё и сеть USB (RNDIS)');
+  assert.equal(oDriverSettings({ model: 'viki', port: 'com', com: '/dev/ttyACM0' }), null);
+  assert.throws(() => oDriverSettings({ model: 'viki', port: 'rndis' }), /только по COM-порту/);
+  assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту или сети USB/);
+});
+
 test('serverInfo и ККТ по умолчанию', async () => {
   const { nStatus, oBody } = await pCall('GET', '/serverInfo');
   assert.equal(nStatus, 200);

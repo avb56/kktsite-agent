@@ -49,14 +49,6 @@
         <h2>ККТ</h2>
         <button type="button" class="primary" id="add-device">Добавить ККТ</button>
       </div>
-      <div class="alert warn" id="rndis-box" hidden>
-        <p><b>Найдена ККТ Штрих-М в режиме сетевой карты USB (RNDIS).</b> Так её с компьютером не связать:
-          нужен USB-COM. Сервер переведёт её сам — ККТ перезагрузится и появится COM-портом.</p>
-        <p class="muted" id="rndis-list"></p>
-        <progress id="rndis-progress" max="1" value="0" hidden></progress>
-        <p class="muted" id="rndis-hint" hidden></p>
-        <button type="button" class="primary" id="rndis-button">Перевести в USB-COM</button>
-      </div>
       <p class="muted" id="devices-empty" hidden>ККТ пока нет. Добавьте ККТ, с которой будет работать касса.</p>
       <ul class="devices" id="devices"></ul>
     </section>
@@ -254,14 +246,12 @@
       </div>
       <div class="mode-row" hidden>
         <p><span class="muted">Связь ККТ:</span> <span class="mode"></span></p>
-        <progress class="mode-progress" max="1" value="0" hidden></progress>
         <p class="muted mode-hint"></p>
       </div>
       <div class="check" hidden></div>
       <div class="actions">
         <button type="button" data-act="toggle"></button>
         <button type="button" data-act="check">Проверить связь</button>
-        <button type="button" data-act="mode" hidden></button>
         <button type="button" data-act="default">Сделать по умолчанию</button>
         <button type="button" data-act="edit">Настроить</button>
         <button type="button" data-act="delete" class="danger-text">Удалить</button>
@@ -280,12 +270,24 @@
           <input name="id" maxlength="16" pattern="[a-zA-Z0-9_\-]{1,16}" placeholder="по порядку">
           <small class="muted">латиница, цифры, «_», «-»; потом не меняется</small>
         </label>
-        <label>Модель
+        <label>ККТ
+          <select name="vendor">
+            <option value="atol">Атол</option>
+            <option value="viki">Вики</option>
+            <option value="shtrih">Штрих-М (Посцентр)</option>
+          </select>
+        </label>
+        <label data-vendor="atol">Модель Атола
           <select name="model"></select>
         </label>
-        <label>Канал связи
-          <select name="port"></select>
-        </label>
+
+        <fieldset class="wide channels">
+          <legend>Канал связи</legend>
+          <p class="muted find-row"><span id="find-state"></span>
+            <button type="button" id="find-again">Искать снова</button></p>
+          <div id="channel-list"></div>
+          <progress id="switch-progress" max="1" value="0" hidden></progress>
+        </fieldset>
 
         <label data-port="usb">USB-устройство
           <select name="usbDevice"></select>
@@ -294,7 +296,7 @@
           <input name="com" list="com-list" maxlength="32" placeholder="/dev/ttyACM0 или 3">
           <datalist id="com-list"></datalist>
         </label>
-        <label data-port="com">Скорость
+        <label data-port="com" data-baud>Скорость
           <select name="baudRate"></select>
         </label>
         <label data-port="tcp">IP-адрес ККТ
@@ -307,15 +309,12 @@
           <input name="mac" pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" placeholder="00:11:22:33:44:55">
         </label>
 
-        <label data-core="no">Обмен с ОФД через кассу
+        <label data-vendor="atol">Обмен с ОФД через кассу
           <select name="ofdChannel"></select>
         </label>
-        <p class="muted wide" data-core="yes" hidden>Штрих-М сервер ведёт сам, без драйверов Посцентра.
-          Порт с ККТ подставлен из найденных. По USB у ККТ нет своей сети: после подключения — кнопка
-          «Включить связь через компьютер», и ККТ сама пойдёт в ОФД и ОИСМ через этот компьютер.</p>
       </div>
 
-      <details data-core="no">
+      <details data-vendor="atol">
         <summary>Пароли протокола ККТ</summary>
         <p class="muted">Это не логин к серверу — учётные записи сервера на вкладке «Доступ». Эти пароли
           передаются драйверу Атола при подключении к ККТ, как в «АТОЛ. Web Requests» («Пароль доступа»,
