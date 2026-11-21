@@ -436,12 +436,19 @@ async function pRndisToCom() {
   try {
     const oDone = await pApi('POST', 'agentRndis', { id: aRndis[0].id });
     // Перезагрузка ККТ — ~15 с; дождаться, что COM-порт появился.
-    for (let n = 0; n < 30; n += 1) {
+    let bCom = false;
+    for (let n = 0; n < 30 && !bCom; n += 1) {
       await new Promise((f) => setTimeout(f, 1000));
       const aPorts = await pApi('GET', 'agentPorts').catch(() => []);
-      if (aPorts.some((o) => o.model === 'shtrih')) break;
+      bCom = aPorts.some((o) => o.model === 'shtrih');
     }
-    oNotify.success(`${oDone.name || 'ККТ'}: теперь USB-COM. Если её нет в списке — добавьте (модель «Штрих-М»); если есть — подключите и включите связь через компьютер.`);
+    if (bCom) {
+      oNotify.success(`${oDone.name || 'ККТ'}: теперь USB-COM. Если её нет в списке — добавьте (модель «Штрих-М»); если есть — подключите и включите связь через компьютер.`);
+    } else {
+      // По сети ККТ перезагрузку не всегда принимает (Win7, 21.11.2026): режим
+      // записан, но действует после перезагрузки.
+      oNotify.warning(`${oDone.name || 'ККТ'}: режим USB-COM записан, но COM-порт не появился — перезагрузите ККТ кнопкой питания.`);
+    }
   } catch (oError) {
     oNotify.error(oError.message);
   } finally {

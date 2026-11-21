@@ -359,16 +359,30 @@ export async function pRndisToCom(oFound) {
     oPort = await KKT.pInitPort(oFound.oDev);
   }
   if (oPort.oError) throw new Error(oPort.oError.message);
+  // Временная ККТ — только перевод: обмен с ОФД после заданий (kkt-core,
+  // shtrih/worker.js pOfdExchange) ей не нужен, а после закрытия порта он
+  // писал в журнал «Cannot call write after a stream was destroyed».
+  oPort.nOfdDownUntil = Number.MAX_SAFE_INTEGER;
   const oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: 'shtrih', id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
   try {
     await oKKT.pTaskSender({ type: 'setShtrihUsbMode', shtrihUsbMode: { socks: true, usb: 'vcom' } });
-    await oKKT.pTaskSender({ type: 'rebootDevice' }).catch(() => {});
-    fLog(`ККТ ${oPort.sName}: USB — COM-порт (VCOM), перезагрузка`);
-    return { name: oPort.sName };
+    // Перезагрузка по сети на Win7 не сработала (21.11.2026): ККТ осталась в
+    // RNDIS до перезагрузки кнопкой — так и пишем, а не молчим.
+    let sReboot = '';
+    try {
+      const [oReboot] = await oKKT.pTaskSender({ type: 'rebootDevice' });
+      if (oReboot?.status === 'error') sReboot = oReboot.error?.description || 'ошибка';
+    } catch (oError) {
+      sReboot = oError.message;
+    }
+    fLog(`ККТ ${oPort.sName}: USB — COM-порт (VCOM)` + (sReboot ? `; перезагрузка не прошла (${sReboot}) — перезагрузите ККТ кнопкой` : ', перезагрузка'));
+    return { name: oPort.sName, ...(sReboot ? { rebootFailed: sReboot } : {}) };
   } finally {
     await Promise.resolve(oPort.pDestroy?.(false)).catch(() => {});
   }
 }
+
+const R_PORT_GONE = /File not found|The device does not recognize the command|device (is not connected|has been lost)|Порт ККТ закрыт|stream was destroyed|ENOENT|ENXIO|EIO\b/i;
 
 /** COM-порт по настройке: на Windows — номер (как у Web Requests), иначе путь. */
 const sPortPath = (vCom) => (process.platform === 'win32' && /^\d+$/.test(String(vCom)) ? `COM${vCom}` : String(vCom ?? ''));
@@ -422,7 +436,11 @@ export function oCreateCoreHandle() {
         const aResults = await oKKT.pTaskSender(oTask);
         return aResults?.[0] ?? null;
       } catch (oError) {
-        if (oPort?.oError) throw { code: N_CONNECTION_LOST, description: oError.message };
+        // Порт пропал (ККТ перезагрузили или выдернули): у Windows-сборки
+        // serialport это ошибки записи/чтения вида «… (GetOverlappedResult):
+        // File not found», а не обрыв чтения. Тоже обрыв: device.js откроет
+        // ККТ заново, когда порт появится (21.11.2026, Win7).
+        if (oPort?.oError || R_PORT_GONE.test(oError?.message || '')) throw { code: N_CONNECTION_LOST, description: oError.message };
         throw { code: typeof oError.code === 'number' ? oError.code : 500, description: oError.message };
       }
     },
