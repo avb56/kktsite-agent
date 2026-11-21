@@ -177,6 +177,8 @@ export async function pPortList() {
 const N_RNDIS_VID = 0x18D1, N_RNDIS_PID = 0x4EE4;
 const A_RNDIS_HOST = '192.168.137.1', A_RNDIS_KKT = '192.168.137.111';
 
+// stdin закрываем сразу: PowerShell 2.0 (Windows 7) с открытым stdin после
+// команды ждёт конца ввода и не выходит (21.11.2026: поиск RNDIS висел 60 с).
 const pExec = (sCmd, aArgs, nTimeoutMs = 15e3) => new Promise((fResolve, fReject) =>
   execFile(sCmd, aArgs, { timeout: nTimeoutMs, windowsHide: true }, (oError, sOut, sErr) => {
     if (!oError) return fResolve(String(sOut));
@@ -184,7 +186,7 @@ const pExec = (sCmd, aArgs, nTimeoutMs = 15e3) => new Promise((fResolve, fReject
     const sWhy = String(sErr || '').trim()
       || (oError.killed ? `${sCmd}: не ответил за ${nTimeoutMs / 1000} с` : `${sCmd}: код выхода ${oError.code ?? '?'}`);
     fReject(new Error(sWhy));
-  }));
+  }).stdin?.end());
 
 let oWebUsb = null;
 function oUsbApi() {
@@ -205,13 +207,17 @@ const bRndisUsb = (o) => o?.vendorId === N_RNDIS_VID && o.productId === N_RNDIS_
 // Фильтр — в самом запросе WMI (WQL LIKE): перебор всех устройств в
 // PowerShell 2.0 Windows 7 не укладывался в 15 с (21.11.2026). Скрипт —
 // через -EncodedCommand (UTF-16LE, base64): кавычки фильтра не зависят от
-// разбора командной строки.
+// разбора командной строки. Имена — base64 от UTF-8: в канал PowerShell пишет
+// в кодировке консоли (cp866), а имя подключения бывает русским
+// («Подключение по локальной сети 2»).
 const S_RNDIS_WMI = [
   "$ErrorActionPreference = 'SilentlyContinue'",
-  `Get-WmiObject Win32_NetworkAdapter -Filter "PNPDeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'net|' + $_.NetConnectionID }`,
-  `Get-WmiObject Win32_PnPEntity -Filter "DeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'pnp|' + $_.ConfigManagerErrorCode + '|' + $_.Name }`,
+  'function B($s) { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$s)) }',
+  `Get-WmiObject Win32_NetworkAdapter -Filter "PNPDeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'net|' + (B $_.NetConnectionID) }`,
+  `Get-WmiObject Win32_PnPEntity -Filter "DeviceID LIKE '%VID_18D1&PID_4EE4%'" | ForEach-Object { 'pnp|' + $_.ConfigManagerErrorCode + '|' + (B $_.Name) }`,
   'exit 0',
 ].join('\r\n');
+const sFromB64 = (s) => Buffer.from(s || '', 'base64').toString('utf8');
 const N_RNDIS_WMI_TIMEOUT_MS = 60e3;
 const N_RNDIS_CACHE_MS = 10e3;
 
@@ -238,7 +244,8 @@ async function pFindRndisWmi() {
     return [];
   }
   sRndisWarned = '';
-  const aLines = sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((s) => s.split('|'));
+  const aLines = sOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map((s) => s.split('|'))
+    .map((a) => (a[0] === 'net' ? ['net', sFromB64(a[1])] : a[0] === 'pnp' ? ['pnp', a[1], sFromB64(a[2])] : a));
   const aNet = aLines.filter((a) => a[0] === 'net' && a[1]).map((a) => a[1]);
   if (aNet.length) {
     return aNet.map((sAdapter) => ({ id: `net:${sAdapter}`, sAdapter, description: `Штрих-М — сетевая карта USB «${sAdapter}» (RNDIS)` }));
