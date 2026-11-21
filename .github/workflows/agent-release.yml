@@ -85,9 +85,18 @@ jobs:
             export npm_config_target=12.22.12 npm_config_runtime=node \
               npm_config_disturl=https://nodejs.org/dist npm_config_arch=${{ matrix.gyp_arch }}
             echo "обёртка — под Node $npm_config_target $npm_config_arch"
+            # COM-порт и USB (@serialport/bindings-cpp, usb) едут готовыми
+            # сборками N-API из своих prebuilds — собирать их не нужно. Но их
+            # установщик (node-gyp-build) с npm_config_arch=ia32 пробует
+            # загрузить сборку win32-ia32 в этом x64-процессе, не может и
+            # собирает из исходников под 32-разрядный Node 12 — а исходники
+            # bindings-cpp 10.8 под 32 бита не собираются (C2666). Переменная с
+            # именем пакета — штатный пропуск node-gyp-build (build-test.js).
+            # Загрузку сборок в Node 12 проверяет шаг «Node 12 для Windows 7».
+            SKIP=(env 'USB=1' '@SERIALPORT/BINDINGS_CPP=1')
           fi
           for n in 1 2 3; do
-            npm ci && exit 0
+            "${SKIP[@]}" npm ci && exit 0
             echo "::warning::npm ci не удался (попытка $n), повторяю"
             sleep 10
           done
@@ -106,6 +115,9 @@ jobs:
           /c/Windows/System32/tar.exe -xf "$F"
           cp node-v12.22.12-win-${{ matrix.node12 }}/node.exe .
           ./node.exe -p "process.version + ' ' + process.arch"
+          # Готовые сборки COM-порта и USB грузятся в этом Node 12.
+          cd ../..
+          dist/node12/node.exe -e "require('@serialport/bindings-cpp').autoDetect(); require('usb'); console.log('serialport и usb — ок')"
 
       - name: архив
         env:
