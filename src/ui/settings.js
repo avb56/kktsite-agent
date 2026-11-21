@@ -546,6 +546,7 @@ function fRenderChannels(bVendorChanged = false) {
     if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding) {
       const oHere = oFoundOn(sVendor, sChannel);
       if (oHere?.osNet && oHere.mode) oBox.append(...aNetRows(oHere));
+      if (sChannel === 'ppp' && oHere?.mode?.socks === false) oBox.append(...aPppNoSocksRows(oHere));
     }
     // Выбран канал, на нём ККТ нет, а Штрих есть на другом — предложить перевод.
     if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding && !oFoundOn(sVendor, sChannel)) {
@@ -655,6 +656,18 @@ function aNetRows(oHere) {
   });
   oButton.disabled = bSwitchingChannel;
   oButton.addEventListener('click', () => pSetKktSocks(oHere, !bSocks));
+  return [oP, oButton];
+}
+
+/** PPP без SOCKS: прошивка в PPP в сеть ходит только через SOCKS — без него ОФД и ОИСМ недоступны. */
+function aPppNoSocksRows(oHere) {
+  const oP = Object.assign(document.createElement('p'), {
+    className: 'channel-state error',
+    textContent: 'SOCKS в ККТ выключен: в PPP без него ККТ в сеть не выходит — документы не уйдут в ОФД, коды не проверятся онлайн.',
+  });
+  const oButton = Object.assign(document.createElement('button'), { type: 'button', className: 'primary', textContent: 'Включить SOCKS в ККТ' });
+  oButton.disabled = bSwitchingChannel;
+  oButton.addEventListener('click', () => pSetKktSocks(oHere, true));
   return [oP, oButton];
 }
 
