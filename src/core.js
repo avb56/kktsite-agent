@@ -261,13 +261,33 @@ async function pFindRndisWmi() {
   }));
 }
 
-/** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter?, bNoDriver? }]. */
-export async function pFindRndis() {
-  if (process.platform === 'win32') return pFindRndisWindows();
+async function pFindRndisUsb() {
   let aDevices = [];
   try { aDevices = await oUsbApi().getDevices(); } catch { /* нет доступа к USB — нечего показать */ }
   return aDevices.filter(bRndisUsb)
     .map((oDev) => ({ id: `usb:${oDev.serialNumber || ''}`, oDev, description: `Штрих-М — USB ${oDev.serialNumber || ''} в режиме сетевой карты (RNDIS)` }));
+}
+
+// Запасной путь: ККТ отвечает по сети USB на своём адресе по умолчанию — сеть
+// уже настроена (тест драйвера, ККТ config), сетевую карту искать незачем. Только
+// TCP-подключение и сразу закрыть: Штрих ли это — проверит kkt-core при переводе.
+function bRndisTcp(nTimeoutMs = 1500) {
+  return new Promise((fResolve) => {
+    const oTcp = net.connect(7778, A_RNDIS_KKT);
+    const fDone = (bOk) => { oTcp.destroy(); fResolve(bOk); };
+    oTcp.setTimeout(nTimeoutMs, () => fDone(false));
+    oTcp.once('connect', () => fDone(true));
+    oTcp.once('error', () => fDone(false));
+  });
+}
+
+/** ККТ Штрих-М в режиме RNDIS на этом ПК: [{ id, description, oDev?, sAdapter?, sHost?, bNoDriver? }]. */
+export async function pFindRndis() {
+  const aFound = process.platform === 'win32' ? await pFindRndisWindows() : await pFindRndisUsb();
+  if (aFound.some((o) => !o.bNoDriver)) return aFound;
+  if (!await bRndisTcp()) return aFound;
+  // Ответила по сети — значит, драйвер есть: подсказка «нет драйвера» лишняя.
+  return [{ id: `tcp:${A_RNDIS_KKT}`, sHost: A_RNDIS_KKT, description: `Штрих-М отвечает по сети USB (${A_RNDIS_KKT}) — режим сетевой карты (RNDIS)` }];
 }
 
 // Linux: отцепить сетевой драйвер ядра (rndis_host) от ККТ, иначе интерфейс не забрать.
@@ -309,18 +329,20 @@ export async function pRndisToCom(oFound) {
   if (oFound.bNoDriver) throw new Error('Windows не поставила ККТ драйвер RNDIS — сначала драйвер (подсказка — в плашке)');
   const { KKT } = oCore();
   let oPort;
-  if (oFound.sAdapter) {
+  if (oFound.sAdapter || oFound.sHost) {
     // Адрес из сети ККТ у карты уже есть (её настроили для утилиты или драйвера
     // производителя) — не трогаем: смена адреса оборвала бы их связь с ККТ.
     // Нет — ставим адрес шлюза ККТ. Адреса — цифрами из вывода netsh: от языка
     // Windows не зависят.
-    const sShow = await pExec('netsh', ['interface', 'ipv4', 'show', 'addresses', `name=${oFound.sAdapter}`]).catch(() => '');
-    const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
-    if (aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
-      fLog(`RNDIS: у сетевой карты «${oFound.sAdapter}» уже есть адрес сети ККТ — не меняю`);
-    } else {
-      await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
-        .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+    if (oFound.sAdapter) {
+      const sShow = await pExec('netsh', ['interface', 'ipv4', 'show', 'addresses', `name=${oFound.sAdapter}`]).catch(() => '');
+      const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
+      if (aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
+        fLog(`RNDIS: у сетевой карты «${oFound.sAdapter}» уже есть адрес сети ККТ — не меняю`);
+      } else {
+        await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
+          .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+      }
     }
     let oSocket = null;
     for (let n = 0; n < 10 && !oSocket; n += 1) {
