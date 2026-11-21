@@ -19,6 +19,7 @@
 //     РНМ и соглашение — здесь kkt-core идёт за той ККТ, что ответила;
 //   — служебные данные производителю ККТ — настройка vendorData (settings.js).
 
+import { pHttpFetch } from './http-fetch.js';
 import net from 'node:net';
 import { execFile } from 'node:child_process';
 import dns from 'node:dns';
@@ -91,6 +92,8 @@ function fApplyConfig() {
     pSendToOfd,
     pResolveHost,
     bVendorData,
+    // Node 12 (Windows 7): своего fetch нет — сервер политик через http/https.
+    ...(typeof globalThis.fetch === 'function' ? {} : { fetch: pHttpFetch }),
     policy: { sLicense: license, sPolicyUrl: policyUrl, oStore: oPolicyStore, sHost: 'kktsite-agent/' + (sAgentVersion || 'dev') },
   });
 }

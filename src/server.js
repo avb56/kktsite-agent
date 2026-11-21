@@ -441,8 +441,10 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     const oUrl = new URL(oReq.url, 'http://agent');
     pRoute(oReq, oRes, oUrl).catch((oError) => {
       if (oError instanceof AgentError) return fSendError(oRes, oError.nHttp, oError.message);
-      fLog(`Ошибка ${oReq.method} ${oUrl.pathname}: ${oError.stack || oError}`);
-      fSendError(oRes, 500, oError.message);
+      // kkt-core сообщает об ошибке задания объектом { code, description }, а не Error.
+      const sText = oError?.message || oError?.description || String(oError);
+      fLog(`Ошибка ${oReq.method} ${oUrl.pathname}: ${oError?.stack || sText}`);
+      fSendError(oRes, 500, sText);
     });
   });
 }
