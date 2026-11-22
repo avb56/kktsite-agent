@@ -523,9 +523,10 @@ const A_SHTRIH_CHANNELS = ['vcom', 'ppp', 'rndis'];
 /**
  * ККТ на этом ПК — для окна «Добавить ККТ»: [{ model, channel, com?, name?,
  * description, heldBy?, error? }]. model — shtrih | viki | atol; channel —
- * vcom | ppp | rndis (Штрих), vcom (Вики), usb (Атол). Свободные порты Штриха
+ * vcom | ppp | rndis | driver (Штрих), vcom (Вики), usb (Атол); driver — ККТ
+ * уже подключена агентом через драйвер Посцентра. Свободные порты Штриха
  * открываем — узнать режим и заводской номер; занятые (aHeld: [{ id, name,
- * com?, channel }] — подключённые ККТ агента) не трогаем.
+ * com?, channel, rndisByDriver? }] — подключённые ККТ агента) не трогаем.
  */
 export async function pFindKkt(aHeld = []) {
   const aOut = [];
@@ -552,9 +553,10 @@ export async function pFindKkt(aHeld = []) {
   }
   for (const oFound of await pFindRndis()) {
     const oItem = { model: 'shtrih', channel: 'rndis', description: oFound.description, ...(bOsNet(oFound) ? { osNet: true } : {}) };
-    const oHeld = aHeld.find((o) => o.channel === 'rndis');
+    const oHeld = aHeld.find((o) => o.channel === 'rndis' || o.rndisByDriver);
     if (oHeld) {
       Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, mode: await oHeld.pMode?.().catch(() => undefined) });
+      if (oHeld.rndisByDriver) oItem.channel = 'driver';
       if (oHeld.osNet !== undefined) oItem.osNet = oHeld.osNet || undefined;
     }
     else if (oFound.bNoDriver) oItem.error = oFound.description;

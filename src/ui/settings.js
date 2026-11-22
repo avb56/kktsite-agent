@@ -24,7 +24,18 @@ const O_SHTRIH_CHANNELS = {
   vcom: { title: 'USB-COM (VCOM)', hint: 'Только команды; своей сети у ККТ нет — документы не уходят в ОФД, коды не проверяются онлайн.' },
   ppp: { title: 'USB PPP', hint: 'COM-порт с сетью внутри: ККТ сама ходит в ОФД и ОИСМ через этот компьютер.' },
   rndis: { title: 'Сеть USB (RNDIS)', hint: 'ККТ — сетевая карта USB (192.168.137.111): ходит в ОФД и ОИСМ через этот компьютер.' },
+  driver: {
+    title: 'Через драйвер Посцентра (ТС ПИоТ)',
+    hint: 'Для кассы с ТС ПИоТ: ЕСМ узнаёт о сменах, проверках кодов и чеках от драйвера Посцентра. Драйвер ставится отдельно (где он — вкладка «Общие»).'
+      + ' ККТ — в сети USB через сеть этого компьютера или на COM-порту (VCOM).',
+  },
 };
+// Каналы, между которыми агент переводит ККТ (режим USB); driver — не режим ККТ.
+const A_SWITCH_CHANNELS = ['vcom', 'ppp', 'rndis'];
+// Адрес ККТ для драйвера: сеть USB — TCP к ККТ, COM-порт — serial.
+const S_DRIVER_URI_NET = 'tcp://192.168.137.111:7778?timeout=15000&protocol=v1';
+const sDriverUriCom = (sCom) => `serial://${sCom}?baudrate=115200&timeout=15000&protocol=v1`;
+let oServerInfo = {}; // serverInfo: состояние драйверов
 
 async function pApi(sMethod, sPath, vBody) {
   let oRes;
@@ -135,6 +146,7 @@ function sConnectionSummary(oConn) {
     case 'usb': aParts.push(oConn.usbDevice && oConn.usbDevice !== 'auto' ? `USB ${oConn.usbDevice}` : 'USB, автоматически'); break;
     case 'com': aParts.push(bCore(oConn.model) ? (oConn.com || 'COM ?') : `${oConn.com || 'COM ?'}, ${oConn.baudRate} бод`); break;
     case 'rndis': aParts.push(O_SHTRIH_CHANNELS.rndis.title); break;
+    case 'driver': aParts.push(`драйвер Посцентра, ${String(oConn.driverUri || '?').replace(/\?.*$/, '')}`); break;
     case 'tcp':
     case 'tcpip': aParts.push(`TCP/IP ${oConn.ipAddress || '?'}:${oConn.ipPort || 5555}`); break;
     case 'bluetooth': aParts.push(`Bluetooth ${oConn.mac || '?'}`); break;
@@ -148,8 +160,11 @@ function sConnectionSummary(oConn) {
 
 async function pLoadServerInfo() {
   const oInfo = await pApi('GET', 'serverInfo');
+  oServerInfo = oInfo;
   const aLine = [`kktsite-agent ${oInfo.serverVersion}`];
   aLine.push(oInfo.driverVersion ? `драйвер ДТО ${oInfo.driverVersion}` : 'драйвер ДТО не загружен');
+  if (oInfo.shtrihDriverPath) aLine.push('драйвер Посцентра');
+  fShowShtrihDriverState();
   aLine.push(oInfo.os);
   $('server-line').textContent = aLine.join(' · ');
 
@@ -483,6 +498,7 @@ function aChannelsOf(sVendor) {
   return oMapping.port.filter((o) => o.key !== 'tcpip').map((o) => ({ key: o.key, title: o.description }));
 }
 
+const sPortOf = (sVendor, sChannel) => (sVendor === 'atol' ? sChannel : ['rndis', 'driver'].includes(sChannel) ? sChannel : 'com');
 const sVendorOf = (vModel) => (vModel === 'shtrih' || vModel === 'viki' ? vModel : 'atol');
 const sSelectedChannel = () => $('device-form').querySelector('input[name="channel"]:checked')?.value ?? '';
 
@@ -515,7 +531,8 @@ function oChannelState(sVendor, sChannel) {
 
 /** Штрих, найденный на другом канале, — откуда его переводить. */
 function oShtrihElsewhere(sChannel) {
-  return aFound.find((o) => o.model === 'shtrih' && o.channel !== sChannel && o.channel in O_SHTRIH_CHANNELS && !o.error
+  if (!A_SWITCH_CHANNELS.includes(sChannel)) return null;
+  return aFound.find((o) => o.model === 'shtrih' && o.channel !== sChannel && A_SWITCH_CHANNELS.includes(o.channel) && !o.error
     && (!o.heldBy || o.heldBy === oEditing?.id));
 }
 
@@ -541,7 +558,8 @@ function fRenderChannels(bVendorChanged = false) {
       oBox.append(oHint);
     }
     // Атол: что нашлось — только у USB (драйвер ищет сам); у прочих каналов не пишем.
-    if (sVendor !== 'atol' || oChannel.key === 'usb') oBox.append(oChannelState(sVendor, oChannel.key));
+    if (sVendor === 'shtrih' && oChannel.key === 'driver') oBox.append(...aDriverChannelRows());
+    else if (sVendor !== 'atol' || oChannel.key === 'usb') oBox.append(oChannelState(sVendor, oChannel.key));
     // Штрих в сети USB через сеть ОС: своей сети у ККТ нет — как она выходит в ОФД.
     if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding) {
       const oHere = oFoundOn(sVendor, sChannel);
@@ -566,13 +584,43 @@ function fRenderChannels(bVendorChanged = false) {
   fShowPortFields();
 }
 
+/** Адреса ККТ для драйвера по найденному агентом: [{ key, description }]. */
+function aDriverUris() {
+  const aOut = [];
+  for (const o of aFound) {
+    if (o.model !== 'shtrih' || (o.heldBy && o.heldBy !== oEditing?.id)) continue;
+    if ((o.channel === 'rndis' && o.osNet) || (o.channel === 'driver' && !o.com)) {
+      aOut.push({ key: S_DRIVER_URI_NET, description: `${o.name || 'Штрих-М'} — сеть USB` });
+    } else if (o.com && ['vcom', 'driver'].includes(o.channel)) {
+      aOut.push({ key: sDriverUriCom(o.com), description: `${o.name || 'Штрих-М'} — ${o.com}` });
+    }
+  }
+  return aOut;
+}
+
+/** Канал «через драйвер»: загружен ли драйвер и что нашлось для него. */
+function aDriverChannelRows() {
+  const aRows = [];
+  const fRow = (sClass, sText) => aRows.push(Object.assign(document.createElement('p'), { className: `channel-state ${sClass}`, textContent: sText }));
+  if (oServerInfo.shtrihDriverError) fRow('error', `Драйвер Посцентра не загружен: поставьте его и укажите путь на вкладке «Общие». ${oServerInfo.shtrihDriverError}`);
+  else if (oServerInfo.shtrihDriverPath) fRow('muted', `Драйвер: ${oServerInfo.shtrihDriverPath}`);
+  if (bFinding) { fRow('muted', 'ищу…'); return aRows; }
+  const oHere = aFound.find((o) => o.model === 'shtrih' && o.channel === 'driver');
+  if (oHere?.heldBy) {
+    fRow(oHere.heldBy === oEditing?.id ? 'found' : 'muted', `Подключена: ${oHere.name || 'Штрих-М'}${oHere.heldBy !== oEditing?.id ? ` — уже добавлена как ККТ #${oHere.heldBy}` : ''}`);
+  } else if (!aDriverUris().length) {
+    fRow('muted', 'Свободного Штриха-М для драйвера не найдено: ККТ должна быть в сети USB через сеть этого компьютера (не напрямую по USB) или на COM-порту в режиме VCOM. Адрес можно вписать и руками.');
+  }
+  return aRows;
+}
+
 function fShowPortFields() {
   const oForm = $('device-form');
   const oEl = oForm.elements;
   const sVendor = oEl.vendor.value;
   const sChannel = sSelectedChannel();
-  // Порт формы: у Атола — канал как есть; у Вики и Штриха — COM, кроме RNDIS.
-  let sPort = sVendor === 'atol' ? sChannel : sChannel === 'rndis' ? 'rndis' : 'com';
+  // Порт формы: у Атола — канал как есть; у Вики и Штриха — COM, кроме RNDIS и драйвера.
+  let sPort = sPortOf(sVendor, sChannel);
   if (sPort === 'tcpip') sPort = 'tcp';
   for (const oItem of oForm.querySelectorAll('[data-vendor]')) oItem.hidden = oItem.dataset.vendor !== sVendor;
   for (const oLabel of oForm.querySelectorAll('[data-port]')) oLabel.hidden = oLabel.dataset.port !== sPort;
@@ -581,6 +629,12 @@ function fShowPortFields() {
     const oHere = oFoundOn(sVendor, sChannel);
     const bKnown = aPorts.some((o) => o.key === oEl.com.value && o.model === sVendor);
     if (oHere?.com && !bKnown) oEl.com.value = oHere.com;
+  }
+  // Через драйвер: адреса — из найденных агентом; пустое поле — первый из них.
+  if (sPort === 'driver') {
+    const aUris = aDriverUris();
+    $('driver-uri-list').replaceChildren(...aUris.map((o) => new Option(o.description, o.key)));
+    if (!oEl.driverUri.value.trim() && aUris.length) oEl.driverUri.value = aUris[0].key;
   }
   // Скорость у USB VCOM ни на что не влияет — у Вики и Штриха на найденном USB-порту не спрашиваем.
   if (sVendor !== 'atol' && aPorts.some((o) => o.key === oEl.com.value && o.model === sVendor)) oEl.baudRate.closest('label').hidden = true;
@@ -757,6 +811,7 @@ async function fOpenDeviceDialog(oDevice) {
   oForm.elements.ipAddress.value = oConn.ipAddress || '';
   oForm.elements.ipPort.value = oConn.ipPort || '';
   oForm.elements.mac.value = oConn.mac || '';
+  oForm.elements.driverUri.value = oConn.driverUri || '';
   oForm.elements.accessPassword.value = oConn.accessPassword || '';
   oForm.elements.userPassword.value = oConn.userPassword || '';
   oForm.querySelector('details').open = Boolean(oConn.accessPassword || oConn.userPassword);
@@ -766,7 +821,7 @@ async function fOpenDeviceDialog(oDevice) {
   aFound = [];
   // Канал: Атол — порт; Штрих — rndis по порту, иначе PPP или VCOM по режиму ККТ.
   const sChannel = sVendor === 'atol' ? (oConn.port === 'tcpip' ? 'tcp' : oConn.port)
-    : sVendor === 'shtrih' ? (oConn.port === 'rndis' ? 'rndis' : mModes.get(oDevice?.id)?.ppp === 3 ? 'ppp' : 'vcom') : 'vcom';
+    : sVendor === 'shtrih' ? (['rndis', 'driver'].includes(oConn.port) ? oConn.port : mModes.get(oDevice?.id)?.ppp === 3 ? 'ppp' : 'vcom') : 'vcom';
   $('channel-list').replaceChildren();
   fRenderChannels(true);
   const oRadio = oForm.querySelector(`input[name="channel"][value="${sChannel}"]`);
@@ -781,7 +836,7 @@ function oConnectionFromForm() {
   const oEl = $('device-form').elements;
   const sVendor = oEl.vendor.value;
   const sChannel = sSelectedChannel();
-  const sPort = sVendor === 'atol' ? sChannel : sChannel === 'rndis' ? 'rndis' : 'com';
+  const sPort = sPortOf(sVendor, sChannel);
   const oConn = {
     ...(oEditing?.connectionSettings || {}),
     // Модели Атола — числа (как у Web Requests); Штрих-М и Вики — строкой.
@@ -800,6 +855,7 @@ function oConnectionFromForm() {
     Object.assign(oConn, { ipAddress: oEl.ipAddress.value.trim(), ipPort: Number(oEl.ipPort.value) || 5555 });
   }
   if (sPort === 'bluetooth') oConn.mac = oEl.mac.value.trim();
+  if (sPort === 'driver') oConn.driverUri = oEl.driverUri.value.trim();
   return oConn;
 }
 
@@ -820,6 +876,7 @@ function sFormProblem() {
   if (oConn.port === 'com' && !oConn.com) return 'Укажите порт';
   if (oConn.port === 'tcp' && !oConn.ipAddress) return 'Укажите IP-адрес ККТ';
   if (oConn.port === 'bluetooth' && !oConn.mac) return 'Укажите MAC-адрес';
+  if (oConn.port === 'driver' && !/^(tcp|serial):\/\/\S+$/i.test(oConn.driverUri)) return 'Укажите адрес ККТ для драйвера: tcp://… или serial://…';
   return '';
 }
 
@@ -1064,7 +1121,17 @@ async function pLoadSettings() {
   $('settings-form').elements.cancelWaitingRequestsAfter.value = oSettings.cancelWaitingRequestsAfter;
   $('settings-form').elements.vendorData.checked = oSettings.vendorData !== false;
   $('settings-form').elements.socksServer.checked = oSettings.socksServer === true;
+  $('settings-form').elements.shtrihDriverPath.value = oSettings.shtrihDriverPath || '';
   await pLoadSocks();
+}
+
+/** Под полем пути к драйверу Посцентра — что загружено сейчас. */
+function fShowShtrihDriverState() {
+  const oState = $('shtrih-driver-state');
+  if (!oState) return;
+  oState.className = oServerInfo.shtrihDriverError ? 'error' : '';
+  oState.textContent = oServerInfo.shtrihDriverPath ? `Сейчас загружен: ${oServerInfo.shtrihDriverPath}.`
+    : oServerInfo.shtrihDriverError ? `Сейчас не загружен: ${oServerInfo.shtrihDriverError}` : '';
 }
 
 let oSocks = null; // состояние SOCKS-сервера агента (agentSocks)
@@ -1091,9 +1158,16 @@ async function pSaveSettings(oEvent) {
       cancelWaitingRequestsAfter: Number(oEl.cancelWaitingRequestsAfter.value),
       vendorData: oEl.vendorData.checked,
       socksServer: oEl.socksServer.checked,
+      shtrihDriverPath: oEl.shtrihDriverPath.value.trim(),
     });
     oNotify.success('Настройки сохранены');
     setTimeout(() => pLoadSocks(), 500);
+    // Не загруженный драйвер агент пробует загрузить сразу; загруженный сменится после перезапуска.
+    await pLoadServerInfo().catch(() => {});
+    const sWant = oEl.shtrihDriverPath.value.trim();
+    if (sWant && oServerInfo.shtrihDriverPath && oServerInfo.shtrihDriverRequested !== sWant) {
+      oNotify.warning('Драйвер Посцентра уже загружен из другого места — новый путь подхватится после перезапуска сервера.');
+    }
   } catch (oError) {
     oNotify.error(oError.message);
   }

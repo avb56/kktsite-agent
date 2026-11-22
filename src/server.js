@@ -145,12 +145,23 @@ async function pReadJson(oReq) {
  * { bCan, pRestart } перезапуск сервера службой (main.js); все необязательны.
  */
 /** Порты, которые держат подключённые ККТ агента: [{ id, name, com, channel }]. */
+/** COM-порт из адреса драйвера Посцентра: serial:///dev/ttyACM0, serial://ttyACM0, serial://COM3. */
+export function sDriverUriCom(sUri) {
+  const s = /^serial:\/\/([^?]+)/i.exec(String(sUri || ''))?.[1] ?? '';
+  if (!s) return '';
+  return s.startsWith('/') || /^COM\d+$/i.test(s) ? s : `/dev/${s}`;
+}
+
 function aHeldPortsOf(oRegistry) {
   return [...oRegistry.mDevices.values()].filter((o) => o.oHandle).map((o) => ({
     id: o.id,
     name: o.name,
-    com: o.connectionSettings.port === 'com' ? o.connectionSettings.com : '',
+    com: o.connectionSettings.port === 'com' ? o.connectionSettings.com
+      : o.connectionSettings.port === 'driver' ? sDriverUriCom(o.connectionSettings.driverUri) : '',
     channel: o.oHandle.sChannel || (o.connectionSettings.port === 'rndis' ? 'rndis' : ''),
+    // Через драйвер по сети USB ККТ держит TCP 192.168.137.111:7778 — второе
+    // соединение ККТ не обслуживает: поиск туда не ходит.
+    rndisByDriver: o.connectionSettings.port === 'driver' && /^tcp:\/\/192\.168\.137\.111\b/i.test(o.connectionSettings.driverUri || ''),
     osNet: Boolean(o.oHandle.bOsNet),
     // Режим USB Штриха — через саму ККТ (в очереди её обращений).
     pMode: String(o.connectionSettings.model) === 'shtrih' ? () => o.pShtrihMode(false) : null,
@@ -179,6 +190,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         canRestart: Boolean(oRestart?.bCan),
         shtrihDriverPath: oShtrihDriverInfo().path || '',
         shtrihDriverError: oShtrihDriverInfo().error || '',
+        shtrihDriverRequested: oShtrihDriverInfo().requested || '',
       });
     }
 

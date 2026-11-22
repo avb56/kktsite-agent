@@ -217,6 +217,13 @@
           ККТ 192.168.137.0/24. Не нужен, если ККТ подключена напрямую по USB (Linux) или по PPP, а также если
           на компьютере включён общий доступ к интернету (Windows) и SOCKS в ККТ выключен.
           <span id="socks-state"></span></p>
+        <label>Драйвер Посцентра (Штрих-М с ТС ПИоТ)
+          <input name="shtrihDriverPath" maxlength="1024" placeholder="/opt/fr_drv_ng или C:\Program Files\…">
+        </label>
+        <p class="muted">Каталог драйвера fr_drv_ng (classic_fr_drv_ng.dll, libclassic_fr_drv_ng.so) — нужен
+          только Штриху-М на канале «Через драйвер Посцентра». Драйвер ставится отдельно, как ДТО Атола.
+          Пусто — каталог сервера и системный путь поиска библиотек. Загруженный драйвер сменится после
+          перезапуска сервера. <span id="shtrih-driver-state"></span></p>
         <button type="submit">Сохранить</button>
       </form>
     </section>
@@ -312,6 +319,10 @@
         </label>
         <label data-port="tcp">IP-порт
           <input name="ipPort" type="number" min="1" max="65535" placeholder="5555">
+        </label>
+        <label data-port="driver" class="wide">Адрес ККТ для драйвера
+          <input name="driverUri" list="driver-uri-list" maxlength="256" placeholder="tcp://192.168.137.111:7778?timeout=15000&amp;protocol=v1">
+          <datalist id="driver-uri-list"></datalist>
         </label>
         <label data-port="bluetooth">MAC-адрес
           <input name="mac" pattern="([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" placeholder="00:11:22:33:44:55">

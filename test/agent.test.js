@@ -13,7 +13,7 @@ process.env.KKT_AGENT_DATA = sDataDir;
 
 const { fSetDriverFactory } = await import('../src/driver.js');
 const { Registry } = await import('../src/registry.js');
-const { oCreateAgentServer } = await import('../src/server.js');
+const { oCreateAgentServer, sDriverUriCom } = await import('../src/server.js');
 const { oDriverSettings, oQueueOptions } = await import('../src/device.js');
 const { fAddUser, fDeleteUser } = await import('../src/users.js');
 const { oCreateHttpsController } = await import('../src/tls.js');
@@ -134,6 +134,14 @@ test('ККТ через kkt-core: каналы Штриха-М и Вики', () 
   assert.equal(oDriverSettings({ model: 'shtrih', port: 'driver', driverUri: 'tcp://192.168.137.111:7778' }), null, 'Штрих-М — ещё и через драйвер Посцентра (ТС ПИоТ)');
   assert.throws(() => oDriverSettings({ model: 'viki', port: 'driver' }), /только по COM-порту/);
   assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту, сети USB \(RNDIS\) или через драйвер Посцентра/);
+});
+
+test('адрес драйвера Посцентра → занятый COM-порт', () => {
+  assert.equal(sDriverUriCom('serial:///dev/ttyACM0?baudrate=115200'), '/dev/ttyACM0');
+  assert.equal(sDriverUriCom('serial://ttyACM0?timeout=1'), '/dev/ttyACM0');
+  assert.equal(sDriverUriCom('serial://COM3?baudrate=115200'), 'COM3');
+  assert.equal(sDriverUriCom('tcp://192.168.137.111:7778'), '');
+  assert.equal(sDriverUriCom(''), '');
 });
 
 test('serverInfo и ККТ по умолчанию', async () => {
