@@ -66,6 +66,9 @@ function sBlockReason(nCode) {
 export const O_DEFAULT_CONNECTION = {
   model: 500, accessPassword: '', userPassword: '', port: 'usb', com: '1', baudRate: 1200,
   ipAddress: '', ipPort: 0, mac: '', ofdChannel: 'auto', usbDevice: 'auto',
+  // Своё поле агента: адрес ККТ для драйвера Посцентра (port 'driver'), как в
+  // «Тесте драйвера» — tcp://192.168.137.111:7778?timeout=15000&protocol=v1.
+  driverUri: '',
 };
 export const O_DEFAULT_OTHER = {
   useGlobalScriptsSettings: true, scriptsPath: '',
@@ -104,8 +107,8 @@ export function oDriverSettings(oConn = {}) {
   // ККТ через kkt-core: COM-порт (USB VCOM, PPP или RS-232), Штрих-М — ещё
   // сеть USB (RNDIS). Драйвер Атола их не открывает — настройки не для него.
   if (bCoreModel(oConn.model)) {
-    if (sPort === 'com' || (sPort === 'rndis' && String(oConn.model) === 'shtrih')) return null;
-    throw new AgentError(400, String(oConn.model) === 'shtrih' ? 'Штрих-М подключается по COM-порту или сети USB (RNDIS)' : 'Эта модель подключается только по COM-порту');
+    if (sPort === 'com' || (['rndis', 'driver'].includes(sPort) && String(oConn.model) === 'shtrih')) return null;
+    throw new AgentError(400, String(oConn.model) === 'shtrih' ? 'Штрих-М подключается по COM-порту, сети USB (RNDIS) или через драйвер Посцентра' : 'Эта модель подключается только по COM-порту');
   }
   if (!(sPort in O_PORTS)) throw new AgentError(400, `Неизвестный тип подключения: ${sPort}`);
   const oSettings = {

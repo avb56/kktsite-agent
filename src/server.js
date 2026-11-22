@@ -45,6 +45,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
 import { oDriverInfo } from './driver.js';
+import { oShtrihDriverInfo } from './shtrih-drv.js';
 import { oMapping } from './mapping.js';
 import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindKkt, pShtrihSwitch, pShtrihSetSocks } from './core.js';
 import { oSocksStatus } from './socks.js';
@@ -176,6 +177,8 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         driverError: oDriver.error || '',
         driverWarning: oDriver.warning || '',
         canRestart: Boolean(oRestart?.bCan),
+        shtrihDriverPath: oShtrihDriverInfo().path || '',
+        shtrihDriverError: oShtrihDriverInfo().error || '',
       });
     }
 

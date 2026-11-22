@@ -13,6 +13,7 @@ import { AgentError, oQueueOptions } from './device.js';
 import { vReadJson, fWriteJson } from './store.js';
 import { fSetVendorData } from './core.js';
 import { fSetSocksServer } from './socks.js';
+import { oLoadShtrihDriver } from './shtrih-drv.js';
 
 const S_FILE = 'settings.json';
 
@@ -36,6 +37,10 @@ const O_DEFAULTS = {
   // kktproxy Посцентра. По умолчанию — нет: ККТ выходит в сеть и через стек
   // kkt-core или общий доступ Windows (решение пользователя, 21.11.2026).
   socksServer: false,
+  // Своя настройка агента: каталог драйвера Посцентра (fr_drv_ng) — Штрих-М
+  // для ТС ПИоТ (shtrih-drv.js). Пусто — KKT_AGENT_SHTRIH_DRIVER, иначе каталог
+  // node и системный путь. Загруженный драйвер сменится после перезапуска агента.
+  shtrihDriverPath: '',
 };
 
 let oSettings = null;
@@ -54,6 +59,7 @@ function fApply(oNew) {
   oQueueOptions.nWaitLimitSec = oNew.cancelWaitingRequestsAfter;
   fSetVendorData(oNew.vendorData);
   fSetSocksServer(oNew.socksServer, { vendorData: oNew.vendorData });
+  oLoadShtrihDriver(oNew.shtrihDriverPath || process.env.KKT_AGENT_SHTRIH_DRIVER || '');
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */

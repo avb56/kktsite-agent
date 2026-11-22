@@ -131,7 +131,9 @@ test('ККТ через kkt-core: каналы Штриха-М и Вики', () 
   assert.equal(oDriverSettings({ model: 'shtrih', port: 'rndis' }), null, 'Штрих-М — ещё и сеть USB (RNDIS)');
   assert.equal(oDriverSettings({ model: 'viki', port: 'com', com: '/dev/ttyACM0' }), null);
   assert.throws(() => oDriverSettings({ model: 'viki', port: 'rndis' }), /только по COM-порту/);
-  assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту или сети USB/);
+  assert.equal(oDriverSettings({ model: 'shtrih', port: 'driver', driverUri: 'tcp://192.168.137.111:7778' }), null, 'Штрих-М — ещё и через драйвер Посцентра (ТС ПИоТ)');
+  assert.throws(() => oDriverSettings({ model: 'viki', port: 'driver' }), /только по COM-порту/);
+  assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту, сети USB \(RNDIS\) или через драйвер Посцентра/);
 });
 
 test('serverInfo и ККТ по умолчанию', async () => {

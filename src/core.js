@@ -29,6 +29,7 @@ import { createRequire } from 'node:module';
 import { vReadJson, fWriteJson } from './store.js';
 import { aListSerialPorts, oSerialPort } from './serial.js';
 
+import { pOpenDriver, oDriverSocket } from './shtrih-drv.js';
 const require = createRequire(import.meta.url);
 const S_POLICY_FILE = 'policy.json';
 const S_STORE_FILE = 'policy-store.json';
@@ -426,6 +427,23 @@ async function pOpenRndisPort(oFound) {
 }
 const S_RNDIS_TCP = 'tcp:rndis';
 
+/** Порт kkt-core к ККТ через драйвер Посцентра: кадры Штриха — методом ExchangeBytes. */
+async function pOpenDriverPort(sUri, oConn = {}) {
+  const { KKT } = oCore();
+  const nPassword = Number(oConn.userPassword) || 30;
+  const oOpen = await pOpenDriver(sUri, nPassword);
+  const oSocket = oDriverSocket(oOpen.oDrv, nPassword);
+  const oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' }).catch((oError) => ({ oError }));
+  if (oPort.oError) {
+    await oOpen.pClose();
+    throw Object.assign(new Error(oPort.oError.message), { code: N_NO_CONNECTION });
+  }
+  oPort.oDrv = oOpen.oDrv;
+  oPort.pDestroy = async () => { await oSocket.close(); await oOpen.pClose(); };
+  oPort.sAgentPath = `driver:${sUri}`;
+  return oPort;
+}
+
 // PPP, только что закрытый (переподключение, смена настроек, поиск), сразу не
 // открывается: ККТ ещё не ждёт нового рукопожатия, первая попытка уходит в
 // таймаут (~13 с); через 3–4 с — открывается (стенд, 21.11.2026). Поэтому после
@@ -720,7 +738,12 @@ export function oCreateCoreHandle() {
       // Штрих по сети USB (RNDIS): Linux — стек kkt-core поверх USB, Windows —
       // сетевая карта ОС и TCP к 192.168.137.111. Иначе — COM-порт (VCOM или
       // PPP — kkt-core различит сам).
-      if (oConn.port === 'rndis') {
+      if (oConn.port === 'driver') {
+        // Штрих через штатный драйвер Посцентра (shtrih-drv.js) — для ТС ПИоТ.
+        if (sType !== 'shtrih') throw Object.assign(new Error('Через драйвер Посцентра подключается только Штрих-М'), { code: N_NO_CONNECTION });
+        oPort = await pOpenDriverPort(oConn.driverUri, oConn);
+        this.oDrv = oPort.oDrv;
+      } else if (oConn.port === 'rndis') {
         const oFound = await pRndisToOpen().catch((oError) => { throw Object.assign(oError, { code: N_NO_CONNECTION }); });
         oPort = await pOpenRndisPort(oFound).catch((oError) => { throw Object.assign(new Error(oError.message), { code: N_NO_CONNECTION }); });
         this.bOsNet = bOsNet(oFound);
@@ -734,7 +757,7 @@ export function oCreateCoreHandle() {
         await pDestroy(oPort);
         throw oError;
       }
-      this.sChannel = sType === 'shtrih' ? sPortChannel(oPort) : 'vcom';
+      this.sChannel = sType !== 'shtrih' ? 'vcom' : oPort.oDrv ? 'driver' : sPortChannel(oPort);
       oKKT = new KKT({ sConnectionType: 'comPort', sVendorOrUrl: sType, id: oPort.sRegNumKKT || '', sNameKKT: '' }, oPort);
       // Обрыв связи (PPP закрыт, ККТ перезагрузилась, чтение порта упало) —
       // сообщить устройству: оно откроет ККТ заново, не дожидаясь задания.
@@ -767,14 +790,17 @@ export function oCreateCoreHandle() {
         throw { code: typeof oError.code === 'number' ? oError.code : 500, description: oError.message };
       }
     },
-    /** Канал, на котором ККТ открыта: vcom | ppp | rndis. */
+    /** Канал, на котором ККТ открыта: vcom | ppp | rndis | driver. */
     sChannel: '',
+    /** Контекст драйвера Посцентра (канал driver) — для методов, которые видит ТС ПИоТ. */
+    oDrv: null,
     /** RNDIS через сеть ОС (TCP), а не стеком kkt-core. */
     bOsNet: false,
     fClose() {
       const o = oPort;
       oPort = null;
       this.sChannel = '';
+      this.oDrv = null;
       oKKT = null;
       pDestroy(o);
     },
