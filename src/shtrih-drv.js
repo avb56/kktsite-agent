@@ -161,7 +161,9 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
       const aTlv = a.slice(4 + nCode, 4 + nCode + nTlv);
       return {
         sMethod: 'FNCheckItemBarcode',
-        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarCode: sLatin(a.slice(4, 4 + nCode)), ...(aTlv.length ? { TLVData: Buffer.from(aTlv) } : {}) },
+        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarCode: sLatin(a.slice(4, 4 + nCode)), TLVData: Buffer.from(aTlv) },
+        // TLVData задаём всегда, пустым тоже: в нём остаётся ответ прошлой
+        // проверки, и драйвер дописал бы его к FF61h (ККТ отвечает D3h).
         aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
         // Ответ FF61h: 2004, причина, 2100, длина доп. данных, код ФН онлайн-проверки, 2106, TLV ОИСМ.
         fAnswer(o) {
