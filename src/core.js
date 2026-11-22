@@ -61,11 +61,19 @@ const oPolicyStore = {
   },
 };
 
+/**
+ * Куда соединяться за ККТ. 192.168.137.1 — «мы» в сети ККТ стека kkt-core
+ * (PPP, RNDIS через libusb): у самого ПК такого адреса тогда нет, а за ним
+ * ККТ ищет этот компьютер — ТС ПИоТ (эмулятор ОФД, табл. 19 = 192.168.137.1:41402)
+ * и прочее, что слушает здесь. Ведём на 127.0.0.1.
+ */
+export const sKktTargetHost = (sHost) => (sHost === '192.168.137.1' ? '127.0.0.1' : sHost);
+
 /** Обмен ККТ с ОФД: соединение, посылка, первый пришедший ответ — как /api/ofd кабинета. */
 function pSendToOfd(sHostPort, aBytes) {
   return new Promise((fResolve, fReject) => {
     const n = sHostPort.lastIndexOf(':');
-    const oSocket = net.connect(Number(sHostPort.slice(n + 1)), sHostPort.slice(0, n), () => oSocket.write(Buffer.from(aBytes)));
+    const oSocket = net.connect(Number(sHostPort.slice(n + 1)), sKktTargetHost(sHostPort.slice(0, n)), () => oSocket.write(Buffer.from(aBytes)));
     let bDone = false;
     const fDone = (fThen, v) => { if (!bDone) { bDone = true; fThen(v); } };
     oSocket.once('data', (aData) => { fDone(fResolve, [...aData]); oSocket.end(); });

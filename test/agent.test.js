@@ -645,3 +645,10 @@ test('продолженное после блокировки задание с
   await pWaitDone('w3');
   assert.deepEqual(await aStatuses('w3'), ['ready', 'ready'], 'чек закрылся, X-отчёт после него выполнен');
 });
+
+test('сеть ККТ стека kkt-core: 192.168.137.1 — этот ПК (ТС ПИоТ, эмулятор ОФД)', async () => {
+  const { sKktTargetHost } = await import('../src/core.js');
+  assert.equal(sKktTargetHost('192.168.137.1'), '127.0.0.1', 'адреса шлюза у ПК в PPP и libusb нет');
+  assert.equal(sKktTargetHost('ofd.masterfich.ru'), 'ofd.masterfich.ru');
+  assert.equal(sKktTargetHost('192.168.137.10'), '192.168.137.10');
+});
