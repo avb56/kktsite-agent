@@ -22,7 +22,9 @@
 //                     поиск, как у обёрток Атола
 //   KKT_AGENT_DATA    каталог данных (список ККТ, учётки)
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { uptime } from 'node:os';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { oLoadDriver } from './driver.js';
 import { Registry } from './registry.js';
@@ -35,13 +37,28 @@ import { fConfigureSocks } from './socks.js';
 import { oCreateHttpsController } from './tls.js';
 import { oInstallLayout } from './layout.js';
 import { Updater } from './update.js';
-import { sDataDir } from './store.js';
+import { fWriteJson, sDataDir } from './store.js';
+import { rmSync } from './fsx.js';
 import { aUserNames, fAddUser, fDeleteUser } from './users.js';
 
 const { version: S_VERSION } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 function fLog(sMessage) {
   console.log(`${new Date().toISOString()} ${sMessage}`);
+}
+
+// Служба остановлена со страницы (кнопка «Остановить службу»): флаг в каталоге
+// данных. Процесс тогда поднимается «пустым» — без драйверов, ККТ, SOCKS и
+// обновлений, только страница с кнопкой «Запустить». Флаг до последней
+// загрузки ПК не считается: после перезагрузки касса должна работать сама.
+const sStoppedFile = () => join(sDataDir(), 'stopped.json');
+function bStoppedFlag() {
+  try {
+    if (!existsSync(sStoppedFile())) return false;
+    if (statSync(sStoppedFile()).mtimeMs >= Date.now() - uptime() * 1000) return true;
+    rmSync(sStoppedFile(), { force: true });
+  } catch { /* нет доступа — работать как обычно */ }
+  return false;
 }
 
 function fUsersCommand([sCommand, sName, sPassword]) {
@@ -64,15 +81,20 @@ async function pServe() {
   const sHost = process.env.KKT_AGENT_HOST || '0.0.0.0';
 
   fLog(`kktsite-agent ${S_VERSION}, данные: ${sDataDir()}`);
-  const oDriver = oLoadDriver(process.env.KKT_AGENT_DRIVER);
-  if (oDriver.loaded) fLog(`Драйвер ДТО ${oDriver.version}: ${oDriver.path}`);
-  else fLog(`Драйвер ДТО не загружен — ККТ не подключить: ${oDriver.error}`);
-  if (oDriver.warning) fLog(`ВНИМАНИЕ: ${oDriver.warning}`);
+  const bStopped = bStoppedFlag();
+  if (bStopped) {
+    fLog('Служба остановлена со страницы: драйверы и ККТ не открываю — запустить можно там же');
+  } else {
+    const oDriver = oLoadDriver(process.env.KKT_AGENT_DRIVER);
+    if (oDriver.loaded) fLog(`Драйвер ДТО ${oDriver.version}: ${oDriver.path}`);
+    else fLog(`Драйвер ДТО Атола не загружен — ККТ Атол не подключить: ${oDriver.error}`);
+    if (oDriver.warning) fLog(`ВНИМАНИЕ: ${oDriver.warning}`);
+  }
 
   // kkt-core (Штрих-М): журнал агента, версия — для статистики сервера политик.
   fConfigureCore({ fLog, sVersion: S_VERSION, sPolicyUrl: oInstallLayout()?.sPolicyUrl });
   fConfigureSocks({ fLog });
-  oGetSettings(); // срок хранения заданий — из settings.json
+  if (!bStopped) oGetSettings(); // срок хранения заданий, SOCKS, драйвер Посцентра — из settings.json
   const oRegistry = new Registry();
   // HTTPS — тот же обработчик на соседнем порту; включается кнопкой на странице.
   const oHttps = oCreateHttpsController({
@@ -100,9 +122,21 @@ async function pServe() {
     bCan: Boolean(process.env.INVOCATION_ID)
       || process.env.XPC_SERVICE_NAME === 'ru.kktsite.agent'
       || (process.platform === 'win32' && Boolean(oLayout)),
+    bStopped,
     async pRestart() {
       if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — перезапускаюсь всё равно');
       fStop('перезапуск со страницы');
+    },
+    // Остановить: флаг и выход — служба поднимет процесс без драйверов и ККТ.
+    // Запустить: снять флаг и выйти — служба поднимет агент как обычно.
+    async pSetStopped(bStop) {
+      if (bStop) {
+        fWriteJson('stopped.json', { at: new Date().toISOString() });
+        if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — останавливаюсь всё равно');
+      } else {
+        rmSync(sStoppedFile(), { force: true });
+      }
+      fStop(bStop ? 'остановка службы со страницы' : 'запуск службы со страницы');
     },
   };
   const oServer = oCreateAgentServer({ oRegistry, sVersion: S_VERSION, fLog, oHttps, oUpdater, oRestart });
@@ -112,8 +146,8 @@ async function pServe() {
   });
   fLog(`Слушаю http://${sHost}:${nPort}/api/v2/, настройки ККТ — http://${sHost === '0.0.0.0' ? '127.0.0.1' : sHost}:${nPort}/`);
   await oHttps.pRestore();
-  await oRegistry.pRestore(fLog);
-  if (oLayout) {
+  if (!bStopped) await oRegistry.pRestore(fLog);
+  if (oLayout && !bStopped) {
     fLog(`Установка ${oLayout.sRoot}, ${oLayout.sPlatform}; обновления — ${oLayout.sUpdateUrl}${oUpdater.bAuto ? '' : ' (автообновление выключено)'}`);
     oUpdater.fStart();
   }

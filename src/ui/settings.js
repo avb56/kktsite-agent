@@ -177,8 +177,17 @@ async function pLoadServerInfo() {
     oAlerts.append(oDiv);
     return oDiv;
   };
-  if (oInfo.driverError) {
-    const oDiv = fAlert('err', `Драйвер ДТО 10 не загружен — ККТ не подключить. ${oInfo.driverError} `);
+  if (oInfo.stopped) {
+    const oDiv = fAlert('err', 'Служба агента остановлена: ККТ и драйверы не открыты, касса не печатает. ');
+    const oButton = document.createElement('button');
+    oButton.type = 'button';
+    oButton.textContent = 'Запустить службу';
+    oButton.addEventListener('click', () => pServiceAction('start', oButton));
+    oDiv.append(oButton);
+  } else if (oInfo.driverError) {
+    // Без драйвера Атола работают Штрих-М (kkt-core и драйвер Посцентра) —
+    // это не авария, а предупреждение для тех, у кого Атол.
+    const oDiv = fAlert('warn', `Драйвер ДТО 10 Атола не загружен — ККТ Атол не подключить (Штрих-М работает без него). ${oInfo.driverError} `);
     // Поставили или обновили драйвер — он подхватится только перезапуском сервера.
     if (oInfo.canRestart) {
       const oButton = document.createElement('button');
@@ -192,14 +201,21 @@ async function pLoadServerInfo() {
   // Скрывается вложенный блок, а не раздел: hidden разделов — у вкладок.
   $('restart-panel').hidden = !oInfo.canRestart;
   $('restart-none').hidden = Boolean(oInfo.canRestart);
+  $('service-state').textContent = oInfo.stopped ? 'Служба остановлена.' : 'Служба работает.';
+  $('service-button').textContent = oInfo.stopped ? 'Запустить службу' : 'Остановить службу';
+  $('restart-button').hidden = Boolean(oInfo.stopped);
 }
 
 // ——— перезапуск сервера ———
 
-/** Дождаться, пока сервер снова ответит, и перечитать страницу. */
-function fReloadWhenBack() {
+/**
+ * Дождаться, пока сервер снова ответит (и, если задано, придёт в нужное
+ * состояние: остановка ждёт очереди ККТ), и перечитать страницу.
+ */
+function fReloadWhenBack(fReady = () => true) {
   setTimeout(function fWait() {
-    pApi('GET', 'serverInfo').then(() => location.reload(), () => setTimeout(fWait, 2000));
+    pApi('GET', 'serverInfo').then((oInfo) => (fReady(oInfo) ? location.reload() : setTimeout(fWait, 2000)),
+      () => setTimeout(fWait, 2000));
   }, 4000);
 }
 
@@ -210,6 +226,22 @@ async function pRestart(oButton) {
     await pApi('POST', 'agentRestart');
     oNotify.info('Сервер перезапускается — страница обновится сама');
     fReloadWhenBack();
+  } catch (oError) {
+    oButton.disabled = false;
+    oNotify.error(oError.message);
+  }
+}
+
+/** Остановить или запустить службу (кнопка на «Доступе» и в предупреждении). */
+async function pServiceAction(sAction, oButton) {
+  if (sAction === 'stop' && !await pConfirm('Остановить службу агента? Она дождётся, пока очереди ККТ опустеют, '
+    + 'и отпустит ККТ, порты и драйверы. Касса не сможет печатать, пока службу не запустят снова на этой странице '
+    + '(или пока не перезагрузят ПК).', 'Остановить')) return;
+  oButton.disabled = true;
+  try {
+    await pApi('POST', 'agentService', { action: sAction });
+    oNotify.info(sAction === 'stop' ? 'Служба останавливается — страница обновится сама' : 'Служба запускается — страница обновится сама');
+    fReloadWhenBack((oInfo) => Boolean(oInfo.stopped) === (sAction === 'stop'));
   } catch (oError) {
     oButton.disabled = false;
     oNotify.error(oError.message);
@@ -1336,10 +1368,18 @@ async function pStart() {
   $('notify').addEventListener('mouseenter', fNotifyPause);
   $('notify').addEventListener('mouseleave', () => { if (aNotifyQueue.length) fNotifyResume(); });
   $('restart-button').addEventListener('click', (oEvent) => pRestart(oEvent.currentTarget));
+  $('service-button').addEventListener('click', (oEvent) => pServiceAction(oServerInfo?.stopped ? 'start' : 'stop', oEvent.currentTarget));
 
   try {
     oMapping = await pApi('GET', 'utils/mapping');
-    await Promise.all([pLoadServerInfo(), pRefreshDevices(), pLoadSettings(), pLoadHttps(), pLoadUpdate(), pLoadUsers(), pLoadPiot()]);
+    await pLoadServerInfo();
+    // Остановленная служба отвечает только о себе, учётках и HTTPS.
+    if (oServerInfo.stopped) {
+      fShowTab('access');
+      await Promise.all([pLoadHttps(), pLoadUsers()]);
+      return;
+    }
+    await Promise.all([pRefreshDevices(), pLoadSettings(), pLoadHttps(), pLoadUpdate(), pLoadUsers(), pLoadPiot()]);
   } catch (oError) {
     oNotify.error(oError.message);
   }

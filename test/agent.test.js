@@ -566,6 +566,31 @@ test('перезапуск сервера: без службы — 409, под �
   }
 });
 
+test('остановка службы: остановленный агент отвечает только о себе, запуск — снова', async () => {
+  const aCalls = [];
+  const oSvc = oCreateAgentServer({
+    oRegistry: new Registry(),
+    sVersion: 'test',
+    oRestart: { bCan: true, bStopped: true, pRestart: async () => {}, pSetStopped: async (b) => { aCalls.push(b); } },
+  });
+  await new Promise((f) => oSvc.listen(0, '127.0.0.1', f));
+  try {
+    const sSvc = `http://127.0.0.1:${oSvc.address().port}/api/v2`;
+    const fPost = (sPath, oBody) => fetch(`${sSvc}/${sPath}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(oBody) });
+    assert.equal((await (await fetch(`${sSvc}/serverInfo`)).json()).stopped, true);
+    assert.equal((await fetch(`${sSvc}/devices`)).status, 503);
+    assert.equal((await fetch(`${sSvc}/agentUsers`)).status, 200);
+    assert.equal((await fPost('agentService', { action: 'x' })).status, 400);
+    assert.equal((await fPost('agentService', { action: 'start' })).status, 200);
+    assert.equal((await fPost('agentService', { action: 'stop' })).status, 200);
+    await new Promise((f) => setTimeout(f, 20));
+    assert.deepEqual(aCalls, [false, true]);
+  } finally {
+    oSvc.close();
+  }
+  assert.equal((await pCall('POST', '/agentService', { action: 'stop' })).nStatus, 409);
+});
+
 test('после перезапуска подключённая ККТ подключается снова', async () => {
   const oRegistry = new Registry();
   assert.equal(oRegistry.oGet('1').oHandle, null);

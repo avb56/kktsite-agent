@@ -44,6 +44,22 @@
         а эта страница спросит логин и пароль. Пока учёток нет — сервер открыт всем в локальной сети.</p>
     </section>
 
+    <section class="panel" data-pane="access" role="tabpanel" aria-labelledby="tab-access">
+      <h2>Служба агента</h2>
+      <p class="muted" id="restart-none">Сервер запущен не службой — перезапускайте и останавливайте его вручную.</p>
+      <div id="restart-panel" hidden>
+      <p class="muted" id="service-state"></p>
+      <p class="muted">Перезапуск нужен после обновления драйвера Атола: драйвер загружается при запуске сервера.
+        Остановка освобождает ККТ, порты и драйверы, пока службу не запустят снова этой же кнопкой
+        (страница остаётся доступной; после перезагрузки ПК служба запустится сама). Сервер дождётся,
+        пока очереди ККТ опустеют, — на это время касса не сможет печатать.</p>
+      <div class="actions">
+        <button type="button" id="restart-button">Перезапустить сервер</button>
+        <button type="button" id="service-button">Остановить службу</button>
+      </div>
+      </div>
+    </section>
+
     <section class="panel" data-pane="kkt" role="tabpanel" aria-labelledby="tab-kkt">
       <div class="panel-head">
         <h2>ККТ</h2>
@@ -228,16 +244,6 @@
       </form>
     </section>
 
-    <section class="panel" data-pane="settings" role="tabpanel" aria-labelledby="tab-settings">
-      <h2>Перезапуск сервера</h2>
-      <p class="muted" id="restart-none">Сервер запущен не службой — перезапустите его вручную.</p>
-      <div id="restart-panel" hidden>
-      <p class="muted">Нужен после обновления драйвера Атола: драйвер загружается при запуске сервера.
-        Сервер дождётся, пока очереди ККТ опустеют, и перезапустится — на несколько секунд касса не
-        сможет печатать.</p>
-      <button type="button" id="restart-button">Перезапустить сервер</button>
-      </div>
-    </section>
   </main>
 
   <div class="notify away" id="notify" role="status" aria-live="polite" hidden></div>

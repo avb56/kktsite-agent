@@ -21,6 +21,7 @@
 // Сверх Web Requests: GET|POST /api/v2/agentHttps и GET /agent.crt — HTTPS
 // агента по кнопке (tls.js); GET|POST /api/v2/agentUpdate — версия и
 // самообновление (update.js); POST /api/v2/agentRestart — перезапуск службой;
+// POST /api/v2/agentService {action:'stop'|'start'} — остановить / запустить службу;
 // GET|POST|DELETE /api/v2/agentUsers — учётные записи сервера (users.js).
 //
 // ТС ПИоТ (piot.js): /piot/* — сквозной путь к модулю проверки кодов
@@ -188,6 +189,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         driverError: oDriver.error || '',
         driverWarning: oDriver.warning || '',
         canRestart: Boolean(oRestart?.bCan),
+        stopped: Boolean(oRestart?.bStopped),
         shtrihDriverPath: oShtrihDriverInfo().path || '',
         shtrihDriverError: oShtrihDriverInfo().error || '',
         shtrihDriverRequested: oShtrihDriverInfo().requested || '',
@@ -256,6 +258,17 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
       return undefined;
     }
 
+    // Остановить / запустить службу (кнопка на вкладке «Доступ»). Остановленный
+    // агент — без драйверов и ККТ: отвечает только страница и эти вызовы.
+    if (sPath === '/api/v2/agentService' && sMethod === 'POST') {
+      if (!oRestart?.bCan) throw new AgentError(409, 'Сервер запущен не службой — остановите или запустите его вручную');
+      const { action } = await pReadJson(oReq);
+      if (action !== 'stop' && action !== 'start') throw new AgentError(400, "action: 'stop' — остановить службу, 'start' — запустить");
+      fSend(oRes, 200, {});
+      setImmediate(() => oRestart.pSetStopped(action === 'stop').catch((oError) => fLog(`Служба: ${oError.message}`)));
+      return undefined;
+    }
+
     // Учётные записи сервера (basic-авторизация, users.js). Первая включает
     // вход, удаление последней — выключает.
     if (sPath === '/api/v2/agentUsers') {
@@ -278,6 +291,9 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         return fSend(oRes, 200, { users: aUserNames() });
       }
     }
+
+    // Остановленная служба: всё, что ниже (ККТ, задания, настройки, обновление), — нет.
+    if (oRestart?.bStopped) throw new AgentError(503, 'Служба агента остановлена — запустите её на странице агента, вкладка «Доступ»');
 
     // Версия и самообновление (update.js) — своё, у Web Requests такого нет.
     if (sPath === '/api/v2/agentUpdate' && oUpdater) {
