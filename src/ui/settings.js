@@ -184,10 +184,10 @@ async function pLoadServerInfo() {
     oButton.textContent = 'Запустить службу';
     oButton.addEventListener('click', () => pServiceAction('start', oButton));
     oDiv.append(oButton);
-  } else if (oInfo.driverError) {
-    // Без драйвера Атола работают Штрих-М (kkt-core и драйвер Посцентра) —
-    // это не авария, а предупреждение для тех, у кого Атол.
-    const oDiv = fAlert('warn', `Драйвер ДТО 10 Атола не загружен — ККТ Атол не подключить (Штрих-М работает без него). ${oInfo.driverError} `);
+  } else if (oInfo.driverError && !oInfo.driverMissing) {
+    // Драйвера Атола нет вовсе (касса со Штрихом) — не предупреждаем; есть, но
+    // не грузится (другая разрядность, повреждён) — да.
+    const oDiv = fAlert('err', `Драйвер ДТО 10 Атола не загружен — ККТ Атол не подключить. ${oInfo.driverError} `);
     // Поставили или обновили драйвер — он подхватится только перезапуском сервера.
     if (oInfo.canRestart) {
       const oButton = document.createElement('button');
@@ -198,6 +198,7 @@ async function pLoadServerInfo() {
     }
   }
   if (oInfo.driverWarning) fAlert('warn', oInfo.driverWarning);
+  if (oInfo.shtrihDriverArchError && !oInfo.stopped) fAlert('err', `Драйвер Посцентра не загружен. ${oInfo.shtrihDriverArchError}`);
   // Скрывается вложенный блок, а не раздел: hidden разделов — у вкладок.
   $('restart-panel').hidden = !oInfo.canRestart;
   $('restart-none').hidden = Boolean(oInfo.canRestart);

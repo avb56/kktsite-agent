@@ -18,27 +18,47 @@
 
 import { createRequire } from 'node:module';
 
+import { aAtolDriverArchs, aShtrihDriverArchs, sArchMismatch } from './winreg.js';
+
 const require = createRequire(import.meta.url);
 
 let oWrapper = null;
 let oInfo = { loaded: false, path: null, error: null };
 let sLoadedFrom = null;
+let sTriedPath = null; // с какого пути пробовали в последний раз (не вышло)
+let nTriedAt = 0;
 
 /** Загрузить драйвер Посцентра (один раз за жизнь процесса). Не бросает. */
 export function oLoadShtrihDriver(sPath) {
   if (oInfo.loaded) return oInfo;
+  sTriedPath = sPath || '';
+  nTriedAt = Date.now();
   try {
     oWrapper ??= require('node-atol-wrapper');
     const o = oWrapper.loadShtrihLibrary(sPath || undefined);
     sLoadedFrom = sPath || '';
     oInfo = { loaded: true, path: o.path, error: null };
   } catch (oError) {
-    oInfo = { loaded: false, path: null, error: oError.message };
+    // Windows: драйвер Посцентра есть, но другой разрядности — сказать, что делать.
+    const sMismatch = process.platform === 'win32'
+      ? sArchMismatch('Посцентра', aShtrihDriverArchs({ sPath }), { aAtolArchs: aAtolDriverArchs() })
+      : '';
+    oInfo = { loaded: false, path: null, error: oError.message + (sMismatch ? `. ${sMismatch}` : ''), archError: sMismatch };
   }
   return oInfo;
 }
 
-export const oShtrihDriverInfo = () => ({ ...oInfo, requested: sLoadedFrom });
+// Драйвер поставили (или переставили другой разрядности) после запуска
+// агента — пробуем снова, не чаще раза в 30 с: подключится без перезапуска, а
+// страница покажет, если разрядность не та.
+function fRetryLoad() {
+  if (!oInfo.loaded && sTriedPath !== null && Date.now() - nTriedAt > 30000) oLoadShtrihDriver(sTriedPath);
+}
+
+export const oShtrihDriverInfo = () => {
+  fRetryLoad();
+  return { ...oInfo, requested: sLoadedFrom };
+};
 
 const N_NO_CONNECTION = 2;
 const STX = 2, ENQ = 5, ACK = 6, NAK = 0x15;
@@ -231,6 +251,7 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
  * serial://…). Возвращает { oDrv, pClose }.
  */
 export async function pOpenDriver(sUri, nPassword = 30) {
+  fRetryLoad();
   if (!oInfo.loaded) throw Object.assign(new Error(oInfo.error || 'Драйвер Посцентра (fr_drv_ng) не загружен — укажите его каталог в общих настройках'), { code: N_NO_CONNECTION });
   if (!sUri) throw Object.assign(new Error('Не задан адрес ККТ для драйвера Посцентра'), { code: N_NO_CONNECTION });
   const oDrv = new oWrapper.ShtrihClassic();

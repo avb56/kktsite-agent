@@ -187,11 +187,13 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
         product: 'kktsite-agent',
         driverPath: oDriver.path || '',
         driverError: oDriver.error || '',
+        driverMissing: Boolean(oDriver.missing),
         driverWarning: oDriver.warning || '',
         canRestart: Boolean(oRestart?.bCan),
         stopped: Boolean(oRestart?.bStopped),
         shtrihDriverPath: oShtrihDriverInfo().path || '',
         shtrihDriverError: oShtrihDriverInfo().error || '',
+        shtrihDriverArchError: oShtrihDriverInfo().archError || '',
         shtrihDriverRequested: oShtrihDriverInfo().requested || '',
       });
     }

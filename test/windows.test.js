@@ -13,7 +13,8 @@ const sTmp = mkdtempSync(join(tmpdir(), 'kkt-agent-win-'));
 process.env.KKT_AGENT_DATA = join(sTmp, 'data');
 after(() => rmSync(sTmp, { recursive: true, force: true }));
 
-const { aAtolDriverArchs, sChooseArch, bWindows64 } = await import('../src/winreg.js');
+const { aAtolDriverArchs, sChooseArch, bWindows64, sPeArch, aShtrihDriverArchs, sArchMismatch } = await import('../src/winreg.js');
+const { bNotInstalled } = await import('../src/driver.js');
 const { pChooseSource, fCopyDir } = await import('../src/installer.js');
 const { pWriteZip } = await import('../scripts/zip.mjs');
 const { pPackTarGz } = await import('../src/tar.js');
@@ -40,23 +41,18 @@ test('разрядность драйвера Атола по реестру', (
   assert.equal(sChooseArch([]), '');
 });
 
-test('установщик: из архива на обе разрядности — половина под драйвер, без драйвера — вопрос', async () => {
+test('установщик: из архива на обе разрядности — под драйвер Атола, иначе Посцентра, иначе Windows', async () => {
   const sPack = join(sTmp, 'kktsite-agent-0.2.0-windows');
   for (const sArch of ['x64', 'ia32']) mkdirSync(join(sPack, sArch, 'app'), { recursive: true });
   const sFromIa32 = join(sPack, 'ia32'); // install.cmd запускает 32-битную половину
-  const fNoAsk = () => assert.fail('драйвер найден — спрашивать нечего');
-  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => ['ia32'], fAsk: fNoAsk }), join(sPack, 'ia32'));
-  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => ['x64'], fAsk: fNoAsk }), join(sPack, 'x64'));
+  const fNoShtrih = () => assert.fail('драйвер Атола найден — Посцентр не смотрим');
+  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => ['ia32'], fShtrihArchs: fNoShtrih }), join(sPack, 'ia32'));
+  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => ['x64'], fShtrihArchs: fNoShtrih }), join(sPack, 'x64'));
   assert.equal(await pChooseSource(sFromIa32, 'ia32', { fDriverArchs: () => assert.fail('--arch — реестр не нужен') }), join(sPack, 'ia32'), '--arch важнее');
-
-  // Драйвера нет: в консоли — вопрос (1 — 64, 2 — 32, Enter — отмена).
-  const oNone = { fDriverArchs: () => [], bInteractive: true, bOs64: true };
-  assert.equal(await pChooseSource(sFromIa32, '', { ...oNone, fAsk: async () => '1' }), join(sPack, 'x64'));
-  assert.equal(await pChooseSource(sFromIa32, '', { ...oNone, fAsk: async () => '2' }), join(sPack, 'ia32'));
-  await assert.rejects(pChooseSource(sFromIa32, '', { ...oNone, fAsk: async () => '' }), /отменена/);
-  // 32-битная Windows — выбора нет; без консоли — понятная ошибка с --arch.
-  assert.equal(await pChooseSource(sFromIa32, '', { ...oNone, bOs64: false, fAsk: fNoAsk }), join(sPack, 'ia32'));
-  await assert.rejects(pChooseSource(sFromIa32, '', { ...oNone, bInteractive: false, fAsk: fNoAsk }), /--arch x64 или --arch ia32/);
+  // Атола нет — по драйверу Посцентра; нет и его — по Windows, без вопросов.
+  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => [], fShtrihArchs: () => ['ia32'], bOs64: true }), join(sPack, 'ia32'));
+  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => [], fShtrihArchs: () => [], bOs64: true }), join(sPack, 'x64'));
+  assert.equal(await pChooseSource(sFromIa32, '', { fDriverArchs: () => [], fShtrihArchs: () => [], bOs64: false }), join(sPack, 'ia32'));
 
   const sSingle = join(sTmp, 'kktsite-agent-0.2.0-linux-x64');
   mkdirSync(join(sSingle, 'app'), { recursive: true });
@@ -146,4 +142,35 @@ test('Windows-zip для Windows 7 — из windows7-x64 и windows7-ia32', asyn
   const aNames = aPythonZipInfo(join(sFiles, 'kktsite-agent-0.2.2-windows7.zip')).map((a) => a[0]);
   assert.ok(aNames.includes('kktsite-agent-0.2.2-windows7/ia32/node/node.exe'));
   assert.ok(aNames.includes('kktsite-agent-0.2.2-windows7/install.cmd'));
+});
+
+test('разрядность DLL по заголовку PE, поиск драйвера Посцентра, подсказки', () => {
+  const fPe = (nMachine) => {
+    const a = Buffer.alloc(0x100);
+    a.writeUInt16LE(0x5a4d, 0);
+    a.writeUInt32LE(0x80, 0x3c);
+    a.writeUInt32LE(0x4550, 0x80);
+    a.writeUInt16LE(nMachine, 0x84);
+    return a;
+  };
+  assert.equal(sPeArch('x', { fRead: () => fPe(0x8664) }), 'x64');
+  assert.equal(sPeArch('x', { fRead: () => fPe(0x14c) }), 'ia32');
+  assert.equal(sPeArch('x', { fRead: () => null }), '');
+  assert.equal(sPeArch('x', { fRead: () => Buffer.from('не PE, просто текст, длиннее шестидесяти четырёх байт для проверки') }), '');
+
+  const oFiles = { [join('D:\\pc', 'classic_fr_drv_ng.dll')]: 'ia32', [join('C:\\W', 'System32', 'classic_fr_drv_ng.dll')]: 'x64' };
+  const fArch = (sFile) => oFiles[sFile] || '';
+  assert.deepEqual(aShtrihDriverArchs({ oEnv: { PATH: 'D:\\pc;E:\\x', SystemRoot: 'C:\\W' }, fArch }), ['ia32', 'x64']);
+  assert.deepEqual(aShtrihDriverArchs({ oEnv: { SystemRoot: 'C:\\W' }, fArch }), ['x64']);
+  assert.deepEqual(aShtrihDriverArchs({ sPath: join('D:\\pc', 'classic_fr_drv_ng.dll'), oEnv: { SystemRoot: 'Z:' }, fArch }), ['ia32'], 'путь к самой DLL');
+
+  assert.equal(sArchMismatch('Атола', [], { sOwn: 'x64' }), '', 'драйвера нет — молчим');
+  assert.equal(sArchMismatch('Атола', ['x64'], { sOwn: 'x64' }), '');
+  assert.match(sArchMismatch('Атола', ['ia32'], { sOwn: 'x64' }), /32-разрядный драйвер Атола, а агент 64-разрядный: переустановите агента/);
+  assert.match(sArchMismatch('Посцентра', ['ia32'], { sOwn: 'x64', aAtolArchs: ['x64'] }), /поставьте 64-разрядный драйвер Посцентра/, 'агент совпадает с Атолом — менять драйвер Посцентра');
+  assert.match(sArchMismatch('Посцентра', ['ia32'], { sOwn: 'x64' }), /переустановите агента/);
+
+  const sHead = 'ATOL DTO 10 driver library not found. Tried:\n';
+  assert.equal(bNotInstalled(`${sHead}  /x/libfptr10.so: /x/libfptr10.so: cannot open shared object file: No such file or directory\n  <system library path>: libfptr10.so: cannot open shared object file: No such file or directory`, 'linux'), true);
+  assert.equal(bNotInstalled(`${sHead}  /x/libfptr10.so: libdep.so.1: cannot open shared object file: No such file or directory`, 'linux'), false, 'файл есть, нет зависимости — не «нет драйвера»');
 });

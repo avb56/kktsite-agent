@@ -14,11 +14,10 @@
 // Windows-zip — на обе разрядности (scripts/pack-windows.mjs):
 //   kktsite-agent-<версия>-windows/{x64,ia32}/{node,app}, install.cmd …
 // install.cmd запускает 32-битный node (работает на любой Windows), а ставится
-// та половина, что совпадает с установленным драйвером Атола (winreg.js);
-// --arch — выбрать руками. В versions/<версия> — обычная раскладка {node, app}.
+// та половина, что совпадает с установленным драйвером Атола, без него — с
+// драйвером Посцентра, без обоих — с Windows (winreg.js); --arch — выбрать руками. В versions/<версия> — обычная раскладка {node, app}.
 
 import { execFileSync, spawn } from 'node:child_process';
-import { createInterface } from 'node:readline';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { rmSync } from './fsx.js';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -26,7 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { sNodeFile } from './layout.js';
 import { oParseArgs, oPlatformService } from './service.js';
 import { fSwitchCurrent } from './update.js';
-import { aAtolDriverArchs, bWindows64, sChooseArch } from './winreg.js';
+import { aAtolDriverArchs, aShtrihDriverArchs, bWindows64, sChooseArch } from './winreg.js';
 
 const S_APP_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -93,63 +92,38 @@ const aRunInstalled = (sRoot, aArgs) => [
   [join(sRoot, 'current', 'app', 'src', 'main.js'), ...aArgs],
 ];
 
-/** Вопрос в консоли: ответ строкой (Enter — пустая строка). */
-function pAsk(sQuestion) {
-  const oRl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((fResolve) => oRl.question(sQuestion, (sAnswer) => { oRl.close(); fResolve(sAnswer.trim()); }));
-}
-
 const sBits = (sArch) => (sArch === 'x64' ? '64' : '32');
-
-/**
- * Драйвера Атола нет — какую половину ставить. В консоли спросить
- * (рекомендуемая — по разрядности Windows), без консоли — ошибка с действием.
- * На 32-битной Windows выбора нет.
- */
-async function pAskArch({ bInteractive, bOs64, fAsk }) {
-  const sAfter = 'Поставьте драйвер ДТО 10 Атола той же разрядности, затем на странице настроек — «Перезапустить сервер».';
-  if (!bOs64) {
-    console.log(`Драйвер ДТО 10 Атола не найден. Windows 32-битная — ставлю 32-разрядного агента. ${sAfter}`);
-    return 'ia32';
-  }
-  if (!bInteractive) {
-    throw new Error('Не найден драйвер ДТО 10 Атола. Установите его и запустите install.cmd снова, '
-      + 'или укажите разрядность будущего драйвера: --arch x64 или --arch ia32.');
-  }
-  const sAnswer = await fAsk([
-    'Драйвер ДТО 10 Атола не найден. Агент должен совпадать по разрядности с драйвером,',
-    'который вы поставите:',
-    '  1 — 64-разрядный (рекомендуется: Windows 64-битная)',
-    '  2 — 32-разрядный',
-    '  Enter — отмена',
-    'Ваш выбор: ',
-  ].join('\n'));
-  const sArch = { 1: 'x64', 2: 'ia32' }[sAnswer];
-  if (!sArch) throw new Error('Установка отменена.');
-  console.log(`Ставлю ${sBits(sArch)}-разрядного агента. ${sAfter}`);
-  return sArch;
-}
 
 /**
  * Откуда копировать: распакованный архив одной платформы — он сам; Windows-zip
  * на обе разрядности (sPackDir — его половина ia32 или x64) — половина под
- * драйвер Атола; драйвера нет — спросить (pAskArch).
+ * драйвер Атола, без него — под драйвер Посцентра, без обоих — под Windows.
+ * Поставили драйвер другой разрядности потом — агент скажет об этом на странице.
  */
 export async function pChooseSource(sPackDir, sArch = '', {
   fDriverArchs = aAtolDriverArchs,
-  bInteractive = Boolean(process.stdin.isTTY),
+  fShtrihArchs = aShtrihDriverArchs,
   bOs64 = bWindows64(),
-  fAsk = pAsk,
 } = {}) {
   const sCombined = dirname(sPackDir);
   const bCombined = ['x64', 'ia32'].includes(basename(sPackDir))
     && existsSync(join(sCombined, 'x64', 'app')) && existsSync(join(sCombined, 'ia32', 'app'));
   if (!bCombined) return sPackDir;
   if (sArch) return join(sCombined, sArch);
-  const aDrivers = fDriverArchs();
-  let sChosen = sChooseArch(aDrivers);
-  if (sChosen) console.log(`Драйвер Атола: ${aDrivers.map(sBits).join(' и ')}-разрядный; ставлю агента ${sBits(sChosen)}-разрядного.`);
-  else sChosen = await pAskArch({ bInteractive, bOs64, fAsk });
+  const aAtol = fDriverArchs();
+  let sChosen = sChooseArch(aAtol);
+  if (sChosen) {
+    console.log(`Драйвер Атола: ${aAtol.map(sBits).join(' и ')}-разрядный; ставлю агента ${sBits(sChosen)}-разрядного.`);
+    return join(sCombined, sChosen);
+  }
+  const aShtrih = fShtrihArchs();
+  sChosen = sChooseArch(aShtrih);
+  if (sChosen) {
+    console.log(`Драйвер Посцентра: ${aShtrih.map(sBits).join(' и ')}-разрядный; ставлю агента ${sBits(sChosen)}-разрядного.`);
+  } else {
+    sChosen = bOs64 ? 'x64' : 'ia32';
+    console.log(`Драйверов Атола и Посцентра не нашёл — ставлю агента по разрядности Windows: ${sBits(sChosen)}-разрядного.`);
+  }
   return join(sCombined, sChosen);
 }
 

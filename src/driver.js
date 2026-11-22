@@ -11,7 +11,7 @@
 
 import { createRequire } from 'node:module';
 import { statSync } from 'node:fs';
-import { aAtolDriverArchs } from './winreg.js';
+import { aAtolDriverArchs, sArchMismatch } from './winreg.js';
 
 const require = createRequire(import.meta.url);
 
@@ -38,9 +38,31 @@ export function oLoadDriver(sPath) {
     const sWarning = sWorldWritable(oInfo.path);
     if (sWarning) oInfo.warning = sWarning;
   } catch (oError) {
-    oInfo = { loaded: false, path: null, version: null, error: oError.message + sArchHint() };
+    const sMismatch = sArchHint();
+    oInfo = {
+      loaded: false,
+      path: null,
+      version: null,
+      error: oError.message + (sMismatch ? `. ${sMismatch}` : ''),
+      missing: !sMismatch && bNotInstalled(oError.message),
+    };
   }
   return oInfo;
+}
+
+// Драйвера Атола просто нет (касса только со Штрихом) — не авария, страница
+// об этом не кричит. Windows: нет ключа Атола в реестре; иначе — ни одного
+// файла по путям поиска (а не «файл есть, но не грузится»).
+export function bNotInstalled(sError, sPlatform = process.platform) {
+  if (sPlatform === 'win32') return !aAtolDriverArchs().length;
+  // Строки «  <путь>: <ошибка dlopen>». Нет самого файла — ошибка про сам
+  // libfptr10 («…libfptr10.so: cannot open shared object file»); файл есть,
+  // но не хватает зависимости — про другую библиотеку, это уже не «нет драйвера».
+  const aTried = sError.split('\n').slice(1).filter((s) => s.trim());
+  return aTried.length > 0 && aTried.every((s) => {
+    const sDl = s.slice(s.indexOf(': ') + 2);
+    return /^\S*fptr10\S*: cannot open shared object file/.test(sDl) || /\(no such file\)/i.test(sDl);
+  });
 }
 
 // Windows: драйвер не загрузился, а в реестре — драйвер другой разрядности
@@ -48,15 +70,23 @@ export function oLoadDriver(sPath) {
 // что делать, вместо «library not found».
 function sArchHint() {
   if (process.platform !== 'win32') return '';
-  const sOwn = process.arch === 'ia32' ? 'ia32' : 'x64';
-  const aDrivers = aAtolDriverArchs();
-  if (!aDrivers.length || aDrivers.includes(sOwn)) return '';
-  const sBits = (s) => (s === 'x64' ? '64' : '32');
-  return `. Установлен ${sBits(aDrivers[0])}-разрядный драйвер Атола, а агент ${sBits(sOwn)}-разрядный: `
-    + 'переустановите агента из Windows-архива — установщик выберет нужную разрядность.';
+  return sArchMismatch('Атола', aAtolDriverArchs());
 }
 
-export const oDriverInfo = () => oInfo;
+// Windows: драйвера Атола не было при запуске, а потом его поставили — сразу
+// сказать: разрядность не та или «перезапустите сервер» (драйвер загружается
+// только при запуске). Реестр — не чаще раза в 30 с.
+let nCheckedAt = 0;
+export const oDriverInfo = () => {
+  if (oInfo.missing && process.platform === 'win32' && Date.now() - nCheckedAt > 30000) {
+    nCheckedAt = Date.now();
+    const aArchs = aAtolDriverArchs();
+    if (aArchs.length) {
+      oInfo = { ...oInfo, missing: false, error: sArchMismatch('Атола', aArchs) || 'Драйвер Атола установлен после запуска сервера — перезапустите сервер, чтобы он загрузился' };
+    }
+  }
+  return oInfo;
+};
 
 // Пакет Атола под Linux ставит библиотеку с правами 666: подменить её может
 // любой пользователь ПК, а загрузит её процесс агента. Исправлять чужую
