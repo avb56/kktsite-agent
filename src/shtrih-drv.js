@@ -61,7 +61,10 @@ const aFrame = (aBody) => { const a = [aBody.length, ...aBody]; return [STX, ...
  * без байтов — собираем ответ «команда, код ошибки». Нет связи (ResultCode < 0)
  * — сокет закрывается: устройство переподключит ККТ.
  */
-export function oDriverSocket(oDrv, nPassword = 30) {
+const bDebug = Boolean(process.env.KKT_AGENT_DRV_DEBUG);
+const R_NO_LINK = /связ|connect|порт|port|timeout|таймаут|not connected/i;
+
+export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
   let aIn = [];
   let pChain = Promise.resolve();
   let bClosed = false;
@@ -94,23 +97,98 @@ export function oDriverSocket(oDrv, nPassword = 30) {
       pChain = pChain.then(() => pExchange(aBody)).then((aAnswer) => aAnswer && fReply(aFrame(aAnswer)));
     }
   }
+  const oState = { n2106: 0 }; // 2106 последней проверки кода — для ответа FF69h
   async function pExchange(aBody) {
     const nCmdLen = aBody[0] === 0xFF ? 2 : 1;
     let oResult;
+    let aAnswer;
     try {
-      oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
+      const oMethod = process.env.KKT_AGENT_DRV_RAW ? null : oMethodFor(aBody, nCmdLen, oState);
+      if (oMethod) {
+        oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
+        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}`);
+        if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
+        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${process.env.KKT_AGENT_DRV_DEBUG ? ' ' + JSON.stringify(oResult) : ''}`);
+      } else {
+        oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
+        aAnswer = aFromHex(oResult.TransferBytes);
+      }
     } catch (oError) {
       oResult = { ResultCode: -1, ResultCodeDescription: oError.message };
     }
-    const aAnswer = aFromHex(oResult.TransferBytes);
+    aAnswer ??= [];
     if (aAnswer.length > nCmdLen) return aAnswer;
     if (oResult.ResultCode > 0 && oResult.ResultCode < 256) return [...aBody.slice(0, nCmdLen), oResult.ResultCode];
+    // Отказ самого драйвера (не ККТ и не связь): для kkt-core — «внутренняя
+    // ошибка ПО» (39h), текст драйвера — в журнал.
+    if (!R_NO_LINK.test(oResult.ResultCodeDescription || '')) {
+      fLog(`Драйвер Посцентра: ${sHex(aBody.slice(0, nCmdLen))}h — ${oResult.ResultCode} ${oResult.ResultCodeDescription}`);
+      return [...aBody.slice(0, nCmdLen), 0x39];
+    }
     // Связи с ККТ у драйвера нет — для kkt-core это обрыв порта.
     oSocket.sLastError = oResult.ResultCodeDescription || 'драйвер Посцентра: нет связи с ККТ';
     oSocket.close();
     return null;
   }
   return oSocket;
+}
+
+const nLe = (a) => a.reduce((n, b, i) => n + b * 2 ** (8 * i), 0);
+const aLe = (n, nLen) => Array.from({ length: nLen }, (_, i) => Math.floor(Number(n) / 2 ** (8 * i)) % 256);
+const sLatin = (a) => String.fromCharCode(...a);
+
+/**
+ * Команды Штриха, которые должен видеть ТС ПИоТ, — методами драйвера: модуль
+ * ПИоТ сообщает ЕСМ только о том, что прошло ими (смена, кассир, проверка
+ * кода, чек с кодами). Методы драйвера повторяют команды протокола: данные
+ * кадра kkt-core (после пароля) раскладываем в свойства, ответ ККТ собираем
+ * из свойств в том виде, что разбирает kkt-core (shtrih/parser.js). Прочие
+ * команды — как есть, ExchangeBytes. null — не наша.
+ */
+export function oMethodFor(aBody, nCmdLen, oState = {}) {
+  const nCmd = nCmdLen === 2 ? 0xFF00 | aBody[1] : aBody[0];
+  const nPassword = nLe(aBody.slice(nCmdLen, nCmdLen + 4));
+  const a = aBody.slice(nCmdLen + 4);
+  const oPwd = { Password: nPassword };
+  switch (nCmd) {
+    case 0xFF41: return { sMethod: 'FNBeginOpenSession', oProps: oPwd };
+    case 0xE0: return { sMethod: 'FNOpenSession', oProps: oPwd };
+    case 0xFF42: return { sMethod: 'FNBeginCloseSession', oProps: oPwd };
+    case 0x41: return { sMethod: 'FNCloseSession', oProps: oPwd };
+    // Проверка кода: 2003, 2102, длина КМ, длина TLV, КМ, TLV (мера и количество).
+    case 0xFF61: {
+      const nCode = a[2], nTlv = a[3];
+      const aTlv = a.slice(4 + nCode, 4 + nCode + nTlv);
+      return {
+        sMethod: 'FNCheckItemBarcode',
+        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarCode: sLatin(a.slice(4, 4 + nCode)), ...(aTlv.length ? { TLVData: Buffer.from(aTlv) } : {}) },
+        aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
+        // Ответ FF61h: 2004, причина, 2100, длина доп. данных, код ФН онлайн-проверки, 2106, TLV ОИСМ.
+        fAnswer(o) {
+          const aHead = [o.CheckItemLocalResult & 255, o.CheckItemLocalError & 255, o.MarkingType2 & 255];
+          oState.n2106 = o.KMServerCheckingStatus >= 0 ? o.KMServerCheckingStatus : 0;
+          if (o.KMServerErrorCode < 0) return [...aHead, 0];
+          const aOism = o.KMServerErrorCode === 0 && o.TLVData ? [...o.TLVData] : [];
+          return [...aHead, 2 + aOism.length, o.KMServerErrorCode & 255, oState.n2106 & 255, ...aOism];
+        },
+      };
+    }
+    // Принять / отвергнуть проверенный код; ответ — 2106 (результат проверки).
+    case 0xFF69: return { sMethod: a[0] ? 'FNAcceptMarkingCode' : 'FNDeclineMarkingCode', oProps: oPwd, fAnswer: () => [oState.n2106 & 255] };
+    // Код маркировки к позиции: длина, КМ.
+    case 0xFF67: return { sMethod: 'FNSendItemBarcode', oProps: { ...oPwd, BarCode: sLatin(a.slice(1, 1 + a[0])) } };
+    // Закрытие чека: 16 оплат по 5 байт, округление, 6 налогов по 5 байт, СНО.
+    case 0xFF45: {
+      const oProps = { ...oPwd };
+      for (let i = 0; i < 16; i += 1) oProps[`Summ${i + 1}`] = nLe(a.slice(i * 5, i * 5 + 5));
+      oProps.RoundingSumm = a[80] ?? 0;
+      for (let i = 0; i < 6; i += 1) oProps[`TaxValue${i + 1}`] = nLe(a.slice(81 + i * 5, 86 + i * 5));
+      oProps.TaxType = a[111] ?? 0;
+      // Ответ FF45h: сдача (5), номер ФД (4), ФП (4).
+      return { sMethod: 'FNCloseCheckEx', oProps, aOut: ['Change', 'DocumentNumber', 'FiscalSign'], fAnswer: (o) => [...aLe(o.Change, 5), ...aLe(o.DocumentNumber, 4), ...aLe(o.FiscalSign, 4)] };
+    }
+    default: return null;
+  }
 }
 
 /**

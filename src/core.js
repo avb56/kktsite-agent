@@ -29,7 +29,7 @@ import { createRequire } from 'node:module';
 import { vReadJson, fWriteJson } from './store.js';
 import { aListSerialPorts, oSerialPort } from './serial.js';
 
-import { pOpenDriver, oDriverSocket } from './shtrih-drv.js';
+import { pOpenDriver, oDriverSocket, pDrvCall } from './shtrih-drv.js';
 const require = createRequire(import.meta.url);
 const S_POLICY_FILE = 'policy.json';
 const S_STORE_FILE = 'policy-store.json';
@@ -432,7 +432,7 @@ async function pOpenDriverPort(sUri, oConn = {}) {
   const { KKT } = oCore();
   const nPassword = Number(oConn.userPassword) || 30;
   const oOpen = await pOpenDriver(sUri, nPassword);
-  const oSocket = oDriverSocket(oOpen.oDrv, nPassword);
+  const oSocket = oDriverSocket(oOpen.oDrv, nPassword, fLog);
   const oPort = await KKT.pInitPort({ oSocket, sType: 'shtrih' }).catch((oError) => ({ oError }));
   if (oPort.oError) {
     await oOpen.pClose();
@@ -732,8 +732,10 @@ export function oCreateCoreHandle() {
   let oPort = null;
   let oKKT = null;
   let sType = '';
+  let oConnOpen = null;
   return {
     async fOpen(oConn) {
+      oConnOpen = oConn;
       sType = O_CORE_MODELS[String(oConn.model)];
       // Штрих по сети USB (RNDIS): Linux — стек kkt-core поверх USB, Windows —
       // сетевая карта ОС и TCP к 192.168.137.111. Иначе — COM-порт (VCOM или
@@ -778,6 +780,14 @@ export function oCreateCoreHandle() {
       // Допечатка: у Штриха в kkt-core её пока нет — документ ККТ допечатает
       // сама после замены бумаги; блокировку очереди не держим.
       if (oTask?.type === 'continuePrint' && sType === 'shtrih') return null;
+      // Драйвер Посцентра помнит проверенные и принятые коды сам и повторную
+      // проверку того же кода отвергает (211), пока их не очистить его методом
+      // (стенд, 22.11.2026); у kkt-core для Штриха это задание без команды.
+      if (oTask?.type === 'clearMarkingCodeValidationResult' && this.oDrv) {
+        const oClear = await pDrvCall(this.oDrv, 'FNMarkingClearBuffer', { Password: Number(oConnOpen?.userPassword) || 30 });
+        if (oClear.ResultCode !== 0) throw { code: 500, description: `Драйвер Посцентра: ${oClear.ResultCodeDescription}` };
+        return null;
+      }
       try {
         const aResults = await oKKT.pTaskSender(oTask);
         return aResults?.[0] ?? null;
