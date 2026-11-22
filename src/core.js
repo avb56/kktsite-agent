@@ -556,8 +556,9 @@ export async function pFindKkt(aHeld = []) {
     const oHeld = aHeld.find((o) => o.channel === 'rndis' || o.rndisByDriver);
     if (oHeld) {
       Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, mode: await oHeld.pMode?.().catch(() => undefined) });
-      if (oHeld.rndisByDriver) oItem.channel = 'driver';
       if (oHeld.osNet !== undefined) oItem.osNet = oHeld.osNet || undefined;
+      // Драйвер ходит к ККТ по TCP — это всегда сеть ОС.
+      if (oHeld.rndisByDriver) Object.assign(oItem, { channel: 'driver', osNet: true });
     }
     else if (oFound.bNoDriver) oItem.error = oFound.description;
     else {

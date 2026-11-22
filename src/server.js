@@ -362,7 +362,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     // перезагрузкой ККТ. Подключённую ККТ на это время отключаем, как при смене канала.
     if (sPath === '/api/v2/agentShtrihSocks' && sMethod === 'POST') {
       const { from: oFrom = {}, socks: bSocks } = await pReadJson(oReq);
-      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' : o.com && String(o.com) === String(oFrom.com)));
+      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' || o.rndisByDriver : o.com && String(o.com) === String(oFrom.com)));
       try {
         if (oHeld) await oRegistry.pSetActive(oHeld.id, false);
         return fSend(oRes, 200, { ...await pShtrihSetSocks(oFrom, Boolean(bSocks)), ...(oHeld ? { deactivated: oHeld.id } : {}) });
@@ -380,7 +380,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     // отключения), иначе её отключаем: окно настроек подключит её заново.
     if (sPath === '/api/v2/agentSwitch' && sMethod === 'POST') {
       const { from: oFrom = {}, to: sTo } = await pReadJson(oReq);
-      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' : o.com && String(o.com) === String(oFrom.com)));
+      const oHeld = aHeldPorts().find((o) => (oFrom.channel === 'rndis' ? o.channel === 'rndis' || o.rndisByDriver : o.com && String(o.com) === String(oFrom.com)));
       try {
         if (oHeld && oFrom.channel !== 'rndis' && sTo !== 'rndis') {
           const oDevice = oRegistry.oGet(oHeld.id);

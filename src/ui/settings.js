@@ -558,10 +558,17 @@ function fRenderChannels(bVendorChanged = false) {
       oBox.append(oHint);
     }
     // Атол: что нашлось — только у USB (драйвер ищет сам); у прочих каналов не пишем.
-    if (sVendor === 'shtrih' && oChannel.key === 'driver') oBox.append(...aDriverChannelRows());
+    if (sVendor === 'shtrih' && oChannel.key === 'driver') {
+      oBox.append(...aDriverChannelRows());
+      // По сети USB ККТ и через драйвер выходит в сеть сама — SOCKS или общий доступ.
+      if (oChannel.key === sChannel && !bFinding) {
+        const oNet = oDriverNetKkt();
+        if (oNet) oBox.append(...aNetRows(oNet));
+      }
+    }
     else if (sVendor !== 'atol' || oChannel.key === 'usb') oBox.append(oChannelState(sVendor, oChannel.key));
     // Штрих в сети USB через сеть ОС: своей сети у ККТ нет — как она выходит в ОФД.
-    if (sVendor === 'shtrih' && oChannel.key === sChannel && !bFinding) {
+    if (sVendor === 'shtrih' && oChannel.key === sChannel && sChannel !== 'driver' && !bFinding) {
       const oHere = oFoundOn(sVendor, sChannel);
       if (oHere?.osNet && oHere.mode) oBox.append(...aNetRows(oHere));
       if (sChannel === 'ppp' && oHere?.mode?.socks === false) oBox.append(...aPppNoSocksRows(oHere));
@@ -596,6 +603,15 @@ function aDriverUris() {
     }
   }
   return aOut;
+}
+
+/** Штрих в сети USB через сеть ОС для канала драйвера (адрес tcp или пуст): для SOCKS — как канал rndis. */
+function oDriverNetKkt() {
+  const sUri = $('device-form').elements.driverUri.value.trim();
+  if (sUri && !/^tcp:\/\/192\.168\.137\.111\b/i.test(sUri)) return null;
+  const oHere = aFound.find((o) => o.model === 'shtrih' && o.osNet && o.mode && !o.error
+    && (o.channel === 'driver' || o.channel === 'rndis') && (!o.heldBy || o.heldBy === oEditing?.id));
+  return oHere ? { ...oHere, channel: 'rndis' } : null;
 }
 
 /** Канал «через драйвер»: загружен ли драйвер и что нашлось для него. */

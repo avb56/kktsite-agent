@@ -14,6 +14,7 @@ process.env.KKT_AGENT_DATA = sDataDir;
 const { fSetDriverFactory } = await import('../src/driver.js');
 const { Registry } = await import('../src/registry.js');
 const { oCreateAgentServer, sDriverUriCom } = await import('../src/server.js');
+const { oMethodFor } = await import('../src/shtrih-drv.js');
 const { oDriverSettings, oQueueOptions } = await import('../src/device.js');
 const { fAddUser, fDeleteUser } = await import('../src/users.js');
 const { oCreateHttpsController } = await import('../src/tls.js');
@@ -134,6 +135,21 @@ test('ККТ через kkt-core: каналы Штриха-М и Вики', () 
   assert.equal(oDriverSettings({ model: 'shtrih', port: 'driver', driverUri: 'tcp://192.168.137.111:7778' }), null, 'Штрих-М — ещё и через драйвер Посцентра (ТС ПИоТ)');
   assert.throws(() => oDriverSettings({ model: 'viki', port: 'driver' }), /только по COM-порту/);
   assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту, сети USB \(RNDIS\) или через драйвер Посцентра/);
+});
+
+test('драйвер Посцентра: кассир 1021 — в таблицу 2 и FNSendTLV', () => {
+  // FF0Ch, пароль 30, TLV 1021 «Иванова А.А.» в CP866.
+  const aName = [0x88, 0xA2, 0xA0, 0xAD, 0xAE, 0xA2, 0xA0, 0x20, 0x80, 0x2E, 0x80, 0x2E];
+  const aBody = [0xFF, 0x0C, 30, 0, 0, 0, 0xFD, 0x03, aName.length, 0, ...aName];
+  const oState = {};
+  const o = oMethodFor(aBody, 2, oState);
+  assert.equal(o.sMethod, 'FNSendTLV');
+  assert.deepEqual([...o.oProps.TLVData], aBody.slice(6));
+  assert.deepEqual(o.aPre[0].oProps, { Password: 30, TableNumber: 2, RowNumber: 30, FieldNumber: 2, ValueOfFieldString: 'Иванова А.А.' });
+  o.aPre[0].fDone();
+  assert.equal(oMethodFor(aBody, 2, oState).aPre, undefined, 'тот же кассир — таблицу не пишем');
+  const aInn = [0xFF, 0x0C, 30, 0, 0, 0, 0xB3, 0x04, 12, 0, ...Buffer.from('500100732259')];
+  assert.equal(oMethodFor(aInn, 2, oState).aPre, undefined, 'ИНН — только FNSendTLV');
 });
 
 test('адрес драйвера Посцентра → занятый COM-порт', () => {

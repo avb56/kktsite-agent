@@ -105,6 +105,12 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
     try {
       const oMethod = process.env.KKT_AGENT_DRV_RAW ? null : oMethodFor(aBody, nCmdLen, oState);
       if (oMethod) {
+        // Подготовка (кассир в таблицу ККТ): её сбой — в журнал, команда идёт дальше.
+        for (const oPre of oMethod.aPre ?? []) {
+          const oPreResult = await pDrvCall(oDrv, oPre.sMethod, oPre.oProps);
+          if (oPreResult.ResultCode !== 0) fLog(`Драйвер Посцентра: ${oPre.sMethod} — ${oPreResult.ResultCode} ${oPreResult.ResultCodeDescription}`);
+          else oPre.fDone?.();
+        }
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
         if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
@@ -136,6 +142,11 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
 const nLe = (a) => a.reduce((n, b, i) => n + b * 2 ** (8 * i), 0);
 const aLe = (n, nLen) => Array.from({ length: nLen }, (_, i) => Math.floor(Number(n) / 2 ** (8 * i)) % 256);
 const sLatin = (a) => String.fromCharCode(...a);
+/** CP866 → строка: кириллица и Ёё; прочее за пределами ASCII — «?». */
+const sCp866 = (a) => a.map((n) => (n < 0x80 ? String.fromCharCode(n)
+  : n <= 0xAF ? String.fromCharCode(0x410 + n - 0x80)
+    : n >= 0xE0 && n <= 0xEF ? String.fromCharCode(0x440 + n - 0xE0)
+      : n === 0xF0 ? 'Ё' : n === 0xF1 ? 'ё' : '?')).join('');
 
 /**
  * Команды Штриха, которые должен видеть ТС ПИоТ, — методами драйвера: модуль
@@ -151,6 +162,27 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
   const a = aBody.slice(nCmdLen + 4);
   const oPwd = { Password: nPassword };
   switch (nCmd) {
+    // Реквизит в документ (кассир 1021, его ИНН 1203 и др.) — методом FNSendTLV.
+    // Кассира ЕСМ драйвер берёт не из 1021: после открытия и закрытия смены он
+    // читает имя оператора из таблицы 2 (строка — пароль, поле 2) и шлёт его
+    // (NotifyCashier). Поэтому кассира из задания (1021, CP866) пишем и туда —
+    // только когда сменился. ИНН (1203) в таблице 2 Ритейла нет — ЕСМ его не
+    // получит (стенд, 22.11.2026).
+    case 0xFF0C: {
+      const oMethod = { sMethod: 'FNSendTLV', oProps: { ...oPwd, TLVData: Buffer.from(a) } };
+      if (nLe(a.slice(0, 2)) === 1021 && nPassword >= 1 && nPassword <= 30) {
+        const sName = sCp866(a.slice(4, 4 + nLe(a.slice(2, 4)))).trim().slice(0, 64);
+        const sKey = `${nPassword}:${sName}`;
+        if (sName && oState.sCashier !== sKey) {
+          oMethod.aPre = [{
+            sMethod: 'WriteTable',
+            oProps: { ...oPwd, TableNumber: 2, RowNumber: nPassword, FieldNumber: 2, ValueOfFieldString: sName },
+            fDone: () => { oState.sCashier = sKey; },
+          }];
+        }
+      }
+      return oMethod;
+    }
     case 0xFF41: return { sMethod: 'FNBeginOpenSession', oProps: oPwd };
     case 0xE0: return { sMethod: 'FNOpenSession', oProps: oPwd };
     case 0xFF42: return { sMethod: 'FNBeginCloseSession', oProps: oPwd };
