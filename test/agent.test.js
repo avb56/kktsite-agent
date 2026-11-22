@@ -137,11 +137,14 @@ test('ККТ через kkt-core: каналы Штриха-М и Вики', () 
   assert.throws(() => oDriverSettings({ model: 'shtrih', port: 'usb' }), /COM-порту, сети USB \(RNDIS\) или через драйвер Посцентра/);
 });
 
-test('драйвер Посцентра: кассир 1021 — в таблицу 2 и FNSendTLV', () => {
+test('драйвер Посцентра: кассир 1021 — при смене в таблицу 2, всегда FNSendTLV', () => {
   // FF0Ch, пароль 30, TLV 1021 «Иванова А.А.» в CP866.
   const aName = [0x88, 0xA2, 0xA0, 0xAD, 0xAE, 0xA2, 0xA0, 0x20, 0x80, 0x2E, 0x80, 0x2E];
   const aBody = [0xFF, 0x0C, 30, 0, 0, 0, 0xFD, 0x03, aName.length, 0, ...aName];
   const oState = {};
+  oMethodFor([0x8D, 30, 0, 0, 0, 0], 1, oState); // открыт чек — таблицу не трогаем
+  assert.equal(oMethodFor(aBody, 2, oState).aPre, undefined, 'в чеке кассира в таблицу не пишем');
+  oMethodFor([0xFF, 0x41, 30, 0, 0, 0], 2, oState); // начало открытия смены
   const o = oMethodFor(aBody, 2, oState);
   assert.equal(o.sMethod, 'FNSendTLV');
   assert.deepEqual([...o.oProps.TLVData], aBody.slice(6));

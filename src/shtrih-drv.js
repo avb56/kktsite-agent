@@ -181,16 +181,20 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
   const nPassword = nLe(aBody.slice(nCmdLen, nCmdLen + 4));
   const a = aBody.slice(nCmdLen + 4);
   const oPwd = { Password: nPassword };
+  // Открывается или закрывается смена (FF41h/FF42h … E0h/41h): только тогда
+  // кассир идёт в таблицу 2 — в открытом чеке ККТ запись таблиц отвергает
+  // (74h «Открыт чек», стенд 22.11.2026), а ЕСМ кассира берёт лишь при смене.
+  if (nCmd !== 0xFF0C) oState.bShift = nCmd === 0xFF41 || nCmd === 0xFF42;
   switch (nCmd) {
     // Реквизит в документ (кассир 1021, его ИНН 1203 и др.) — методом FNSendTLV.
     // Кассира ЕСМ драйвер берёт не из 1021: после открытия и закрытия смены он
     // читает имя оператора из таблицы 2 (строка — пароль, поле 2) и шлёт его
     // (NotifyCashier). Поэтому кассира из задания (1021, CP866) пишем и туда —
-    // только когда сменился. ИНН (1203) в таблице 2 Ритейла нет — ЕСМ его не
+    // при открытии и закрытии смены, только когда сменился. ИНН (1203) в таблице 2 Ритейла нет — ЕСМ его не
     // получит (стенд, 22.11.2026).
     case 0xFF0C: {
       const oMethod = { sMethod: 'FNSendTLV', oProps: { ...oPwd, TLVData: Buffer.from(a) } };
-      if (nLe(a.slice(0, 2)) === 1021 && nPassword >= 1 && nPassword <= 30) {
+      if (oState.bShift && nLe(a.slice(0, 2)) === 1021 && nPassword >= 1 && nPassword <= 30) {
         const sName = sCp866(a.slice(4, 4 + nLe(a.slice(2, 4)))).trim().slice(0, 64);
         const sKey = `${nPassword}:${sName}`;
         if (sName && oState.sCashier !== sKey) {
