@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.KKT_AGENT_DATA = mkdtempSync(join(tmpdir(), 'kkt-agent-rlog-'));
-const { fConfigureRemoteLog, fRemoteLog, pFlush, sLogUrl, fResetRemoteLog } = await import('../src/remote-log.js');
+const { fConfigureRemoteLog, fRemoteLog, pFlush, sLogUrl, fResetRemoteLog, sMaskPdText } = await import('../src/remote-log.js');
 const { fSetDebug } = await import('../src/debug.js');
 
 test('адрес приёма — у сервера политик', () => {
@@ -47,4 +47,10 @@ test('предупреждения и ошибки — всегда, обычн�
   assert.ok(oLast.oBody.entries[0].did && oLast.oBody.entries[0].sid);
   assert.equal(await pFlush(), true, 'пусто — нечего слать');
   fSetDebug(false);
+});
+
+test('персональные данные — [ПД] до отправки', () => {
+  assert.equal(sMaskPdText('Неверный ИНН кассира: 12345, покупатель ivan@mail.ru, +7 912 345-67-89'), 'Неверный ИНН кассира: [ПД], покупатель [ПД], [ПД]');
+  const sKeep = 'ККТ РИТЕЙЛ-02Ф, з/н: 0166440019002983, ФД 92, tcp://192.168.137.111:7778';
+  assert.equal(sMaskPdText(sKeep), sKeep);
 });
