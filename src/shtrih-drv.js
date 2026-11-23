@@ -81,7 +81,10 @@ const aFrame = (aBody) => { const a = [aBody.length, ...aBody]; return [STX, ...
  * без байтов — собираем ответ «команда, код ошибки». Нет связи (ResultCode < 0)
  * — сокет закрывается: устройство переподключит ККТ.
  */
-const bDebug = Boolean(process.env.KKT_AGENT_DRV_DEBUG);
+// Отладка — в журнал каждый вызов драйвера с временем: галочка в общих
+// настройках (shtrihDriverDebug) или KKT_AGENT_DRV_DEBUG.
+let bDebug = Boolean(process.env.KKT_AGENT_DRV_DEBUG);
+export function fSetDriverDebug(b) { bDebug = Boolean(b) || Boolean(process.env.KKT_AGENT_DRV_DEBUG); }
 const R_NO_LINK = /связ|connect|порт|port|timeout|таймаут|not connected/i;
 
 export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
@@ -141,7 +144,7 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
         if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
-        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${process.env.KKT_AGENT_DRV_DEBUG ? ' ' + JSON.stringify(oResult) : ''}`);
+        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebug ? ' ' + JSON.stringify(oResult) : ''}`);
       } else {
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);

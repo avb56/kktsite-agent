@@ -1200,6 +1200,7 @@ async function pLoadSettings() {
   $('settings-form').elements.vendorData.checked = oSettings.vendorData !== false;
   $('settings-form').elements.socksServer.checked = oSettings.socksServer === true;
   $('settings-form').elements.shtrihDriverPath.value = oSettings.shtrihDriverPath || '';
+  $('settings-form').elements.shtrihDriverDebug.checked = oSettings.shtrihDriverDebug === true;
   await pLoadSocks();
 }
 
@@ -1239,6 +1240,7 @@ async function pSaveSettings(oEvent) {
       vendorData: oEl.vendorData.checked,
       socksServer: oEl.socksServer.checked,
       shtrihDriverPath: oEl.shtrihDriverPath.value.trim(),
+      shtrihDriverDebug: oEl.shtrihDriverDebug.checked,
     });
     oNotify.success('Настройки сохранены');
     setTimeout(() => pLoadSocks(), 500);
