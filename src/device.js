@@ -485,7 +485,8 @@ export class Device {
         }
       } catch (oError) {
         const oTaskErr = oTaskError(oError);
-        fDebug(`${oTask?.type} — ошибка ${oTaskErr.code} ${oTaskErr.description}`);
+        // Ошибка задания — в журнал всегда (предупреждение уходит и на сервер, remote-log.js).
+        this.fLog?.(`ККТ [${this.id}] ${this.name}: ${oTask?.type} — ошибка ${oTaskErr.code} ${oTaskErr.description}`, 'warn');
         const sReason = sBlockReason(oTaskErr.code);
         // Исход неизвестен, только если фискальная задача успела начаться
         // (номер ФД до неё прочитан) и оборвалась на связи, ФН или бумаге.

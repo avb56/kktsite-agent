@@ -113,8 +113,8 @@ function fApplyConfig() {
       // Отладочный журнал (debug.js) — всё; только текст: второй аргумент —
       // задания с позициями и кодами маркировки.
       info: (s) => { if (bDebugOn() || /^Штрих (PPP|RNDIS)/.test(s)) fLog(s); },
-      warn: (s) => fLog(s),
-      error: (s) => fLog(s),
+      warn: (s) => fLog(s, 'warn'),
+      error: (s) => fLog(s, 'error'),
     },
     pSendToOfd,
     pResolveHost,
@@ -253,7 +253,7 @@ async function pFindRndisWmi() {
     const sEncoded = Buffer.from(S_RNDIS_WMI, 'utf16le').toString('base64');
     sOut = await pExec('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', sEncoded], N_RNDIS_WMI_TIMEOUT_MS);
   } catch (oError) {
-    if (sRndisWarned !== oError.message) fLog(`RNDIS: поиск сетевой карты ККТ не удался — ${oError.message}`);
+    if (sRndisWarned !== oError.message) fLog(`RNDIS: поиск сетевой карты ККТ не удался — ${oError.message}`, 'warn');
     sRndisWarned = oError.message;
     return [];
   }
@@ -383,7 +383,7 @@ async function pOpenRndisPort(oFound) {
   const { KKT } = oCore();
   if (!oFound.sAdapter && !oFound.sHost) {
     // Linux: сеть ККТ — своим стеком kkt-core поверх USB, как у кассы в браузере.
-    try { fDetachKernel(); } catch (oError) { fLog(`RNDIS: драйвер ядра — ${oError.message}`); }
+    try { fDetachKernel(); } catch (oError) { fLog(`RNDIS: драйвер ядра — ${oError.message}`, 'warn'); }
     return KKT.pInitPort(oFound.oDev);
   }
   // Windows: сетевая карта ОС. Адрес из сети ККТ у неё уже есть (её настроили
@@ -395,7 +395,7 @@ async function pOpenRndisPort(oFound) {
     const aHave = sShow.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g) || [];
     if (!aHave.some((sIp) => sIp.startsWith('192.168.137.') && sIp !== A_RNDIS_KKT)) {
       await pExec('netsh', ['interface', 'ipv4', 'set', 'address', `name=${oFound.sAdapter}`, 'static', A_RNDIS_HOST, '255.255.255.0'])
-        .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`));
+        .catch((oError) => fLog(`RNDIS: netsh — ${oError.message}`, 'warn'));
     }
   }
   // Только что закрытое соединение ККТ отпускает не сразу: новое она принимает,
@@ -516,7 +516,7 @@ async function pReadMode(oPort) {
   try {
     return (await oTempKkt(oPort)({ type: 'getShtrihUsbMode' })).shtrihUsbMode;
   } catch (oError) {
-    fLog(`ККТ ${oPort.sName}: режим USB не прочитан — ${oError.message}`);
+    fLog(`ККТ ${oPort.sName}: режим USB не прочитан — ${oError.message}`, 'warn');
     return undefined;
   }
 }
@@ -716,7 +716,7 @@ export async function pShtrihSetSocks(oFrom, bSocks) {
     try {
       await fRun({ type: 'rebootDevice' });
     } catch (oError) {
-      fLog(`ККТ ${oPort.sName}: SOCKS ${bSocks ? 'включён' : 'выключен'}, перезагрузка не прошла (${oError.message})`);
+      fLog(`ККТ ${oPort.sName}: SOCKS ${bSocks ? 'включён' : 'выключен'}, перезагрузка не прошла (${oError.message})`, 'warn');
       return { rebootNeeded: true };
     }
     fLog(`ККТ ${oPort.sName}: SOCKS ${bSocks ? 'включён' : 'выключен'}, перезагрузка`);

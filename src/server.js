@@ -261,7 +261,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     if (sPath === '/api/v2/agentRestart' && sMethod === 'POST') {
       if (!oRestart?.bCan) throw new AgentError(409, 'Сервер запущен не службой — перезапустите его вручную');
       fSend(oRes, 200, {});
-      setImmediate(() => oRestart.pRestart().catch((oError) => fLog(`Перезапуск: ${oError.message}`)));
+      setImmediate(() => oRestart.pRestart().catch((oError) => fLog(`Перезапуск: ${oError.message}`, 'warn')));
       return undefined;
     }
 
@@ -272,7 +272,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
       const { action } = await pReadJson(oReq);
       if (action !== 'stop' && action !== 'start') throw new AgentError(400, "action: 'stop' — остановить службу, 'start' — запустить");
       fSend(oRes, 200, {});
-      setImmediate(() => oRestart.pSetStopped(action === 'stop').catch((oError) => fLog(`Служба: ${oError.message}`)));
+      setImmediate(() => oRestart.pSetStopped(action === 'stop').catch((oError) => fLog(`Служба: ${oError.message}`, 'warn')));
       return undefined;
     }
 
@@ -345,7 +345,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
       } catch (oError) {
         if (oError.name === 'AbortError') return undefined;
         if (!(oError instanceof PiotError)) throw oError;
-        fLog(`ПИоТ: ${sMethod} ${sTail} — ${oError.message}`);
+        fLog(`ПИоТ: ${sMethod} ${sTail} — ${oError.message}`, 'warn');
         return fSendError(oRes, 502, oError.message);
       }
     }
@@ -525,7 +525,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
       if (oError instanceof AgentError) return fSendError(oRes, oError.nHttp, oError.message);
       // kkt-core сообщает об ошибке задания объектом { code, description }, а не Error.
       const sText = oError?.message || oError?.description || String(oError);
-      fLog(`Ошибка ${oReq.method} ${oUrl.pathname}: ${oError?.stack || sText}`);
+      fLog(`Ошибка ${oReq.method} ${oUrl.pathname}: ${oError?.stack || sText}`, 'error');
       fSendError(oRes, 500, sText);
     });
   });

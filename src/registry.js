@@ -48,6 +48,7 @@ export class Registry {
     }
     if (this.mDevices.has(sId)) throw new AgentError(409, `Устройство с ID [${sId}] уже есть`);
     const oDevice = new Device({ ...oDesc, id: sId, isActive: false });
+    oDevice.fLog = this.fLog ?? null; // журнал агента — и у добавленной после запуска
     // Первая ККТ становится ККТ по умолчанию: иначе касса без ?deviceID
     // получала бы «устройство по умолчанию не задано» на единственной ККТ.
     if (oDevice.isDefault || !this.mDevices.size) this.fSetDefault(oDevice);
@@ -118,6 +119,7 @@ export class Registry {
 
   /** Подключить ККТ, которые были подключены при прошлой остановке. */
   async pRestore(fLog) {
+    this.fLog = fLog;
     for (const oDevice of this.mDevices.values()) {
       oDevice.fLog = fLog;
       if (!oDevice.bWantActive) continue;
@@ -126,7 +128,7 @@ export class Registry {
         (oError) => {
           // Не вышло сейчас (ККТ выключена) — агент будет пробовать снова
           // (Device.fScheduleReconnect), пока ККТ не включат.
-          fLog(`ККТ [${oDevice.id}] ${oDevice.name}: ${oError.message} — подключусь, когда ККТ включат`);
+          fLog(`ККТ [${oDevice.id}] ${oDevice.name}: ${oError.message} — подключусь, когда ККТ включат`, 'warn');
         },
       );
     }

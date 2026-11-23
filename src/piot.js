@@ -166,7 +166,7 @@ function fConnectTls(oUrl, fLog, fDone) {
       return fFinish(null, oDescribeCertificate(oPeer, 'first'));
     }
     if (oSaved.fingerprint === sSeen) return fFinish(null, oDescribeCertificate(oPeer, 'pinned'));
-    fLog(`ПИоТ: сертификат модуля ${oUrl.host} сменился (был ${oSaved.fingerprint}, сейчас ${sSeen}) — запрос не отправлен`);
+    fLog(`ПИоТ: сертификат модуля ${oUrl.host} сменился (был ${oSaved.fingerprint}, сейчас ${sSeen}) — запрос не отправлен`, 'warn');
     return fFinish(new PiotError(
       'Сертификат модуля проверки сменился — запрос не отправлен. Если модуль переустанавливали, '
       + 'подтвердите новый сертификат на странице сервера кассы (вкладка «Маркировка»).',

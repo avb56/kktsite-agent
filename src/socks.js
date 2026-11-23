@@ -79,7 +79,7 @@ async function pFirewall(bOn, nPort, oFor) {
   } catch (oError) {
     sFirewall = `брандмауэр Windows не открыл порт ${nPort} (${oError.message}): нужны права администратора — агент службой работает от SYSTEM; `
       + `или разрешите входящие TCP ${nPort} из ${S_KKT_NET} вручную`;
-    fLog(`SOCKS: ${sFirewall}`);
+    fLog(`SOCKS: ${sFirewall}`, 'warn');
   }
   if (oServer === oFor) oStatus = { ...oStatus, firewall: sFirewall };
 }
@@ -108,7 +108,7 @@ export function fSetSocksServer(bOn, { vendorData = true, nPort = N_PORT } = {})
     // Порт занят — скорее всего, kktproxy Посцентра: ККТ пойдёт через него.
     oStatus = { ...oStatus, listening: false, error: oError.code === 'EADDRINUSE'
       ? `порт ${nPort} занят другой программой (kktproxy Посцентра?) — ККТ пойдёт через неё` : oError.message };
-    fLog(`SOCKS: ${oStatus.error}`);
+    fLog(`SOCKS: ${oStatus.error}`, 'warn');
   });
   oNew.listen(nPort, '0.0.0.0', () => {
     if (oServer !== oNew) return;
@@ -186,7 +186,7 @@ function fOnClient(oClient) {
       });
       oPeer.on('error', (oError) => {
         if (nStage === 2) {
-          fLog(`SOCKS: ${sTo}:${nPort} — ${oError.message}`);
+          fLog(`SOCKS: ${sTo}:${nPort} — ${oError.message}`, 'warn');
           fReply(oError.code === 'ENOTFOUND' ? 4 : 5);
           oClient.end();
         } else {

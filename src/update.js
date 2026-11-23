@@ -246,7 +246,7 @@ export class Updater {
       return true;
     } catch (oError) {
       this.sLastError = `Обновление до ${sNew} не удалось: ${oError.message}`;
-      this.fLog(this.sLastError);
+      this.fLog(this.sLastError, 'warn');
       rmSync(sTmp, { recursive: true, force: true });
       this.sState = 'idle';
       throw oError;
@@ -265,7 +265,7 @@ export class Updater {
         if (lstatSync(sPath).isDirectory()) rmSync(sPath, { recursive: true, force: true });
       } catch (oError) {
         // Windows: файлы работающего процесса заняты — удалим в следующий раз.
-        this.fLog(`Не удалить ${sPath}: ${oError.message}`);
+        this.fLog(`Не удалить ${sPath}: ${oError.message}`, 'warn');
       }
     }
   }
@@ -280,7 +280,7 @@ export class Updater {
     }
     const fTick = () => {
       const pRun = this.bAuto ? this.pInstall() : this.pCheck();
-      pRun.catch((oError) => this.fLog(`Проверка обновлений: ${oError.message}`)).finally(() => {
+      pRun.catch((oError) => this.fLog(`Проверка обновлений: ${oError.message}`, 'warn')).finally(() => {
         this.nTimer = setTimeout(fTick, N_CHECK_EVERY_MS);
         this.nTimer.unref?.();
       });

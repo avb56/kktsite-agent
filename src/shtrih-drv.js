@@ -134,14 +134,14 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         // Подготовка (кассир в таблицу ККТ): её сбой — в журнал, команда идёт дальше.
         for (const oPre of oMethod.aPre ?? []) {
           const oPreResult = await pDrvCall(oDrv, oPre.sMethod, oPre.oProps);
-          if (oPreResult.ResultCode !== 0) fLog(`Драйвер Посцентра: ${oPre.sMethod} — ${oPreResult.ResultCode} ${oPreResult.ResultCodeDescription}`);
+          if (oPreResult.ResultCode !== 0) fLog(`Драйвер Посцентра: ${oPre.sMethod} — ${oPreResult.ResultCode} ${oPreResult.ResultCodeDescription}`, 'warn');
           else oPre.fDone?.();
         }
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
         if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
-        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`);
+        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`, 'warn');
       } else {
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
@@ -158,12 +158,12 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
     // Отказ самого драйвера (не ККТ и не связь): для kkt-core — «внутренняя
     // ошибка ПО» (39h), текст драйвера — в журнал.
     if (!R_NO_LINK.test(oResult.ResultCodeDescription || '')) {
-      fLog(`Драйвер Посцентра: ${sHex(aBody.slice(0, nCmdLen))}h — ${oResult.ResultCode} ${oResult.ResultCodeDescription}`);
+      fLog(`Драйвер Посцентра: ${sHex(aBody.slice(0, nCmdLen))}h — ${oResult.ResultCode} ${oResult.ResultCodeDescription}`, 'warn');
       return [...aBody.slice(0, nCmdLen), 0x39];
     }
     // Связи с ККТ у драйвера нет — для kkt-core это обрыв порта.
     oSocket.sLastError = oResult.ResultCodeDescription || 'драйвер Посцентра: нет связи с ККТ';
-    fLog(`Драйвер Посцентра: нет связи с ККТ — ${oSocket.sLastError}; переподключаю`);
+    fLog(`Драйвер Посцентра: нет связи с ККТ — ${oSocket.sLastError}; переподключаю`, 'warn');
     oSocket.close();
     return null;
   }

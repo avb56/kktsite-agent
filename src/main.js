@@ -32,7 +32,8 @@ import { oCreateAgentServer } from './server.js';
 import { pInstallCommand, pUninstallCommand } from './installer.js';
 import { pServiceCommand } from './service.js';
 import { oGetSettings } from './settings.js';
-import { fConfigureCore } from './core.js';
+import { fConfigureCore, oPolicyAccess } from './core.js';
+import { fConfigureRemoteLog, fRemoteLog } from './remote-log.js';
 import { fConfigureSocks } from './socks.js';
 import { oCreateHttpsController } from './tls.js';
 import { oInstallLayout } from './layout.js';
@@ -43,8 +44,11 @@ import { aUserNames, fAddUser, fDeleteUser } from './users.js';
 
 const { version: S_VERSION } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
-function fLog(sMessage) {
+// sLvl — info | warn | error: предупреждения и ошибки уходят и на сервер
+// kktsite (remote-log.js), обычные записи — только при отладочном журнале.
+function fLog(sMessage, sLvl = 'info') {
   console.log(`${new Date().toISOString()} ${sMessage}`);
+  fRemoteLog(sLvl, sMessage);
 }
 
 // Служба остановлена со страницы (кнопка «Остановить службу»): флаг в каталоге
@@ -87,12 +91,14 @@ async function pServe() {
   } else {
     const oDriver = oLoadDriver(process.env.KKT_AGENT_DRIVER);
     if (oDriver.loaded) fLog(`Драйвер ДТО ${oDriver.version}: ${oDriver.path}`);
-    else fLog(`Драйвер ДТО Атола не загружен — ККТ Атол не подключить: ${oDriver.error}`);
-    if (oDriver.warning) fLog(`ВНИМАНИЕ: ${oDriver.warning}`);
+    else fLog(`Драйвер ДТО Атола не загружен — ККТ Атол не подключить: ${oDriver.error}`, 'warn');
+    if (oDriver.warning) fLog(`ВНИМАНИЕ: ${oDriver.warning}`, 'warn');
   }
 
   // kkt-core (Штрих-М): журнал агента, версия — для статистики сервера политик.
   fConfigureCore({ fLog, sVersion: S_VERSION, sPolicyUrl: oInstallLayout()?.sPolicyUrl });
+  // Ключ и адрес — те же, что у сервера политик; ключ касса может передать позже.
+  fConfigureRemoteLog({ sVersion: S_VERSION, fAccess: oPolicyAccess });
   fConfigureSocks({ fLog });
   if (!bStopped) oGetSettings(); // срок хранения заданий, SOCKS, драйвер Посцентра — из settings.json
   const oRegistry = new Registry();
@@ -111,7 +117,7 @@ async function pServe() {
     fLog,
     fExit: async () => {
       // Не рвать чек: дождаться, пока очереди всех ККТ опустеют.
-      if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — перезапускаюсь всё равно');
+      if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — перезапускаюсь всё равно', 'warn');
       fStop('обновление');
     },
   });
@@ -124,7 +130,7 @@ async function pServe() {
       || (process.platform === 'win32' && Boolean(oLayout)),
     bStopped,
     async pRestart() {
-      if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — перезапускаюсь всё равно');
+      if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — перезапускаюсь всё равно', 'warn');
       fStop('перезапуск со страницы');
     },
     // Остановить: флаг и выход — служба поднимет процесс без драйверов и ККТ.
@@ -132,7 +138,7 @@ async function pServe() {
     async pSetStopped(bStop) {
       if (bStop) {
         fWriteJson('stopped.json', { at: new Date().toISOString() });
-        if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — останавливаюсь всё равно');
+        if (!await oRegistry.pWaitIdle()) fLog('Очередь не опустела за 10 минут — останавливаюсь всё равно', 'warn');
       } else {
         rmSync(sStoppedFile(), { force: true });
       }

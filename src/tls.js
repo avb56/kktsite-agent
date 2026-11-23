@@ -339,10 +339,10 @@ export function oCreateHttpsController({ fHandler, nPort, sHost, fLog = () => {}
         if (!oLoaded) throw new Error('сертификата нет — выпустите его на странице настроек');
         await pListen(oLoaded);
         const sReason = oLoaded.oInfo ? sRenewReason(oLoaded.oInfo, oLocalNames()) : 'нет сведений о нём';
-        if (sReason) fLog(`ВНИМАНИЕ: сертификат HTTPS пора перевыпустить (${sReason}) — кнопка на странице настроек`);
+        if (sReason) fLog(`ВНИМАНИЕ: сертификат HTTPS пора перевыпустить (${sReason}) — кнопка на странице настроек`, 'warn');
       } catch (oError) {
         sError = oError.message;
-        fLog(`HTTPS не включился: ${oError.message}`);
+        fLog(`HTTPS не включился: ${oError.message}`, 'warn');
       }
     },
 
