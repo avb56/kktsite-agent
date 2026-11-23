@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { bSocksClientAllowed, sSocksTarget, fSetSocksServer, oSocksStatus } from '../src/socks.js';
+import { bSocksClientAllowed, sSocksTarget, fSetSocksServer, oSocksStatus, fConfigureSocks } from '../src/socks.js';
 
 test('SOCKS: пускает только сеть ККТ и этот ПК', () => {
   assert.ok(bSocksClientAllowed('192.168.137.111'));
@@ -54,4 +54,34 @@ test('SOCKS: CONNECT по адресу и по имени до эха', async ()
   fSetSocksServer(false);
   assert.equal(oSocksStatus().enabled, false);
   oEcho.close();
+});
+
+test('SOCKS на Windows: правило брандмауэра на порт для сети ККТ, при выключении — долой', async () => {
+  const aCalls = [];
+  let bFail = false;
+  fConfigureSocks({ sPlatform: 'win32', fExec: async (sCmd, aArgs) => { aCalls.push([sCmd, ...aArgs].join(' ')); if (bFail && aArgs[2] === 'add') throw new Error('netsh: код выхода 1'); return ''; } });
+  try {
+    const nPort = 19000 + Math.floor(Math.random() * 1000);
+    const pWait = async (f) => { for (let i = 0; i < 100 && !f(); i++) await new Promise((r) => setTimeout(r, 20)); };
+    fSetSocksServer(true, { nPort });
+    await pWait(() => oSocksStatus().firewall);
+    assert.equal(oSocksStatus().firewall, 'ok');
+    assert.deepEqual(aCalls, [
+      'netsh advfirewall firewall delete rule name=kktsite-agent SOCKS',
+      `netsh advfirewall firewall add rule name=kktsite-agent SOCKS dir=in action=allow protocol=TCP localport=${nPort} remoteip=192.168.137.0/24 profile=any`,
+    ]);
+    aCalls.length = 0;
+    fSetSocksServer(false);
+    await pWait(() => aCalls.length);
+    assert.deepEqual(aCalls, ['netsh advfirewall firewall delete rule name=kktsite-agent SOCKS']);
+    // Без прав администратора — сервер работает, в состоянии — почему ККТ не достучится.
+    bFail = true;
+    fSetSocksServer(true, { nPort: nPort + 1 });
+    await pWait(() => oSocksStatus().firewall);
+    assert.ok(oSocksStatus().listening);
+    assert.match(oSocksStatus().firewall, /брандмауэр Windows не открыл порт .*администратора/);
+    fSetSocksServer(false);
+  } finally {
+    fConfigureSocks({ sPlatform: process.platform, fExec: async () => '' });
+  }
 });

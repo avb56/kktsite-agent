@@ -740,13 +740,19 @@ function aNetRows(oHere) {
   const bSocks = Boolean(oHere.mode.socks);
   let bOk = true;
   let sText;
+  let oServerButton = null;
   if (bSocks) {
     sText = 'Выход ККТ в сеть — через SOCKS-сервер 192.168.137.1:1080. ';
-    if (oSocks?.listening) sText += 'SOCKS-сервер агента работает.';
+    if (oSocks?.listening && oSocks.firewall && oSocks.firewall !== 'ok') {
+      bOk = false;
+      sText += `SOCKS-сервер агента работает, но ${oSocks.firewall}.`;
+    } else if (oSocks?.listening) sText += 'SOCKS-сервер агента работает.';
     else if (oSocks?.enabled) sText += `SOCKS-сервер агента не работает: ${oSocks.error || 'запускается'}.`;
     else {
       bOk = false;
-      sText += 'SOCKS-сервер агента выключен: включите его на вкладке «Общие» (или запустите kktproxy Посцентра) — либо выключите SOCKS в ККТ и включите общий доступ к интернету.';
+      sText += 'SOCKS-сервер агента выключен — включите его (или запустите kktproxy Посцентра), либо выключите SOCKS в ККТ и включите общий доступ к интернету.';
+      oServerButton = Object.assign(document.createElement('button'), { type: 'button', className: 'primary', textContent: 'Включить SOCKS-сервер агента' });
+      oServerButton.addEventListener('click', () => pEnableSocksServer(oServerButton));
     }
   } else {
     sText = 'Выход ККТ в сеть — напрямую через шлюз 192.168.137.1: на этом компьютере нужен общий доступ к интернету'
@@ -759,7 +765,27 @@ function aNetRows(oHere) {
   });
   oButton.disabled = bSwitchingChannel;
   oButton.addEventListener('click', () => pSetKktSocks(oHere, !bSocks));
-  return [oP, oButton];
+  return oServerButton ? [oP, oServerButton, oButton] : [oP, oButton];
+}
+
+/** Включить SOCKS-сервер агента из окна ККТ (общая настройка socksServer) и обновить окно. */
+async function pEnableSocksServer(oButton) {
+  oButton.disabled = true;
+  try {
+    await pApi('PUT', 'settings', { socksServer: true });
+    $('settings-form').elements.socksServer.checked = true;
+    // Порт открывается и правило брандмауэра ставится не мгновенно.
+    for (let i = 0; i < 10; i++) {
+      await new Promise((f) => setTimeout(f, 500));
+      await pLoadSocks();
+      if (oSocks?.listening && (oSocks.firewall || !/Windows/i.test(navigator.userAgent))) break;
+    }
+    oNotify.success(oSocks?.listening ? 'SOCKS-сервер агента включён' : `SOCKS-сервер агента не запустился: ${oSocks?.error || 'нет ответа'}`);
+    fRenderChannels();
+  } catch (oError) {
+    oNotify.error(`SOCKS-сервер не включён: ${oError.message}`);
+    oButton.disabled = false;
+  }
 }
 
 /** PPP без SOCKS: прошивка в PPP в сеть ходит только через SOCKS — без него ОФД и ОИСМ недоступны. */
@@ -1187,7 +1213,9 @@ let oSocks = null; // состояние SOCKS-сервера агента (agen
 async function pLoadSocks() {
   oSocks = await pApi('GET', 'agentSocks').catch(() => null);
   $('socks-state').textContent = !oSocks || !oSocks.enabled ? ''
-    : oSocks.listening ? `Сейчас: работает, порт ${oSocks.port}.` : `Сейчас: не работает — ${oSocks.error || 'запускается'}.`;
+    : !oSocks.listening ? `Сейчас: не работает — ${oSocks.error || 'запускается'}.`
+      : oSocks.firewall && oSocks.firewall !== 'ok' ? `Сейчас: работает, порт ${oSocks.port}, но ${oSocks.firewall}.`
+        : `Сейчас: работает, порт ${oSocks.port}${oSocks.firewall === 'ok' ? ', брандмауэр Windows открыт для сети ККТ' : ''}.`;
 }
 
 async function pSaveSettings(oEvent) {

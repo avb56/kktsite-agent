@@ -34,6 +34,7 @@ import { rmSync } from './fsx.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { oInstallLayout } from './layout.js';
+import { aFirewallDeleteArgs } from './socks.js';
 
 export const S_SERVICE = 'kktsite-agent';
 const S_UNIT_PATH = `/etc/systemd/system/${S_SERVICE}.service`;
@@ -302,6 +303,8 @@ function oWindows() {
         return `Задача ${S_SERVICE} не установлена.`;
       }
       rmSync(sRunner, { force: true });
+      // Правило брандмауэра SOCKS-сервера (socks.js) — не было его, не ошибка.
+      try { sRun('netsh', aFirewallDeleteArgs(), true); } catch { /* правила нет */ }
       return `Задача ${S_SERVICE} остановлена и удалена. Данные агента (${sDataDir}) не тронуты.`;
     },
     pStatus() {

@@ -13,8 +13,15 @@
 // Имена производителя (*.kktlab.ru) — как в стеке kkt-core (shtrih/ipstack.js):
 // с vendorData — по полному имени (его разрешит DNS производителя), без —
 // хвост служебных данных отрезается, к самому производителю — отказ.
+//
+// Windows: сеть карты ККТ (RNDIS) — «неопознанная», общедоступная, и входящие на
+// порт брандмауэр отбрасывает молча (служба от SYSTEM, окна «разрешить доступ»
+// не будет). Поэтому со включением — правило брандмауэра на порт только для
+// сети ККТ (netsh, имя правила — латиницей: аргументы netsh не в UTF-8), с
+// выключением и при удалении службы (service.js) — убираем.
 
 import net from 'node:net';
+import { execFile } from 'node:child_process';
 
 const N_PORT = 1080;
 const R_VENDOR_NAME = /(^|\.)kktlab\.ru$/i;
@@ -38,9 +45,43 @@ let oServer = null;
 let oStatus = { enabled: false, listening: false, port: N_PORT, error: '' };
 let fLog = () => {};
 let bVendorData = true;
+let sPlatform = process.platform;
+const pExecFile = (sCmd, aArgs) => new Promise((fResolve, fReject) =>
+  execFile(sCmd, aArgs, { timeout: 15e3, windowsHide: true }, (oError, sOut) => (oError
+    ? fReject(new Error(oError.killed ? `${sCmd}: не ответил` : `${sCmd}: код выхода ${oError.code ?? '?'}`))
+    : fResolve(String(sOut)))).stdin?.end());
+let fExec = pExecFile;
 
-export function fConfigureSocks({ fLog: fNewLog } = {}) {
+/** fLog — журнал; sPlatform и fExec — для тестов (брандмауэр Windows). */
+export function fConfigureSocks({ fLog: fNewLog, sPlatform: sNewPlatform, fExec: fNewExec } = {}) {
   if (fNewLog) fLog = fNewLog;
+  if (sNewPlatform) sPlatform = sNewPlatform;
+  if (fNewExec) fExec = fNewExec;
+}
+
+// ——— Брандмауэр Windows ———
+export const S_FIREWALL_RULE = 'kktsite-agent SOCKS';
+const S_KKT_NET = '192.168.137.0/24';
+export const aFirewallDeleteArgs = () => ['advfirewall', 'firewall', 'delete', 'rule', `name=${S_FIREWALL_RULE}`];
+export const aFirewallAddArgs = (nPort) => ['advfirewall', 'firewall', 'add', 'rule', `name=${S_FIREWALL_RULE}`, 'dir=in', 'action=allow',
+  'protocol=TCP', `localport=${nPort}`, `remoteip=${S_KKT_NET}`, 'profile=any'];
+
+/** Правило на порт для сети ККТ: прежнее — долой (порт мог смениться), bOn — новое. */
+async function pFirewall(bOn, nPort, oFor) {
+  if (sPlatform !== 'win32') return;
+  await fExec('netsh', aFirewallDeleteArgs()).catch(() => {}); // правила не было — не ошибка
+  if (!bOn) return;
+  let sFirewall;
+  try {
+    await fExec('netsh', aFirewallAddArgs(nPort));
+    sFirewall = 'ok';
+    fLog(`SOCKS: брандмауэр Windows — порт ${nPort} открыт для сети ККТ ${S_KKT_NET}`);
+  } catch (oError) {
+    sFirewall = `брандмауэр Windows не открыл порт ${nPort} (${oError.message}): нужны права администратора — агент службой работает от SYSTEM; `
+      + `или разрешите входящие TCP ${nPort} из ${S_KKT_NET} вручную`;
+    fLog(`SOCKS: ${sFirewall}`);
+  }
+  if (oServer === oFor) oStatus = { ...oStatus, firewall: sFirewall };
 }
 
 /** Состояние сервера — для страницы. */
@@ -50,12 +91,16 @@ export const oSocksStatus = () => ({ ...oStatus });
 export function fSetSocksServer(bOn, { vendorData = true, nPort = N_PORT } = {}) {
   bVendorData = vendorData;
   if (Boolean(bOn) === oStatus.enabled && nPort === oStatus.port) return;
+  const bWasOn = oStatus.enabled;
   if (oServer) {
     oServer.close();
     oServer = null;
   }
   oStatus = { enabled: Boolean(bOn), listening: false, port: nPort, error: '' };
-  if (!bOn) return;
+  if (!bOn) {
+    if (bWasOn) pFirewall(false, nPort, null);
+    return;
+  }
   const oNew = net.createServer(fOnClient);
   oServer = oNew;
   oNew.on('error', (oError) => {
@@ -69,6 +114,7 @@ export function fSetSocksServer(bOn, { vendorData = true, nPort = N_PORT } = {})
     if (oServer !== oNew) return;
     oStatus = { ...oStatus, listening: true, error: '' };
     fLog(`SOCKS: слушаю 0.0.0.0:${nPort} (для ККТ 192.168.137.0/24)`);
+    pFirewall(true, nPort, oNew);
   });
 }
 
