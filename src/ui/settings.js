@@ -317,17 +317,20 @@ async function pRefreshDevices() {
     try {
       oDevice.oQueue = await pApi('GET', `getRequestsQueueStatus?deviceID=${encodeURIComponent(oDevice.id)}`);
     } catch { /* не критично — просто не покажем */ }
-    // Режим USB Штриха-М — один раз, потом после переключения: запрос идёт к ККТ.
-    if (bShtrih(oDevice.connectionSettings.model) && !mModes.has(oDevice.id)) {
-      try {
-        mModes.set(oDevice.id, await pApi('GET', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`));
-      } catch (oError) {
-        mModes.set(oDevice.id, { sError: oError.message });
-      }
-    }
   }));
   for (const oDevice of aDevices) if (!oDevice.isActive) mModes.delete(oDevice.id);
   fRenderDevices();
+  // Режим USB Штриха-М — один раз, потом после переключения: запрос идёт к ККТ
+  // и без связи ждёт долго — список не ждёт его (без связи вкладка ККТ
+  // оставалась пустой, Win7, 23.11.2026), режим дорисуем, когда придёт.
+  for (const oDevice of aDevices) {
+    if (!oDevice.isActive || !bShtrih(oDevice.connectionSettings.model) || mModes.has(oDevice.id)) continue;
+    mModes.set(oDevice.id, { bPending: true });
+    pApi('GET', `agentShtrihMode?deviceID=${encodeURIComponent(oDevice.id)}`).then(
+      (oMode) => mModes.set(oDevice.id, oMode),
+      (oError) => mModes.set(oDevice.id, { sError: oError.message }),
+    ).then(() => fRenderDevices());
+  }
 }
 
 const O_BLOCK_REASONS = {
@@ -373,8 +376,8 @@ function fRenderDevices() {
       const oMode = mModes.get(oDevice.id);
       q('.mode-row').hidden = false;
       const bNet = oMode && oMode.ppp === 3 && oMode.socks;
-      if (!oMode) {
-        q('.mode').textContent = '…';
+      if (!oMode || oMode.bPending) {
+        q('.mode').textContent = 'читаю…';
       } else if (oMode.sError) {
         q('.mode').textContent = `не прочитана: ${oMode.sError}`;
       } else if (oMode.usb === 'rndis') {

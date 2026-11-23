@@ -154,16 +154,20 @@ export function sDriverUriCom(sUri) {
 }
 
 function aHeldPortsOf(oRegistry) {
-  return [...oRegistry.mDevices.values()].filter((o) => o.oHandle).map((o) => ({
+  // ККТ через драйвер Посцентра, которую хотят подключённой, держит порт и без
+  // связи: агент переподключает её сам, и поиск, придя туда же (по сети USB —
+  // TCP 7778, второе соединение ККТ не принимает), мешал ей подключиться —
+  // «нет связи» без конца (Win7, 23.11.2026).
+  return [...oRegistry.mDevices.values()].filter((o) => o.oHandle || (o.bWantActive && o.connectionSettings.port === 'driver')).map((o) => ({
     id: o.id,
     name: o.name,
     com: o.connectionSettings.port === 'com' ? o.connectionSettings.com
       : o.connectionSettings.port === 'driver' ? sDriverUriCom(o.connectionSettings.driverUri) : '',
-    channel: o.oHandle.sChannel || (o.connectionSettings.port === 'rndis' ? 'rndis' : ''),
+    channel: o.oHandle?.sChannel || (o.connectionSettings.port === 'rndis' ? 'rndis' : ''),
     // Через драйвер по сети USB ККТ держит TCP 192.168.137.111:7778 — второе
     // соединение ККТ не обслуживает: поиск туда не ходит.
     rndisByDriver: o.connectionSettings.port === 'driver' && /^tcp:\/\/192\.168\.137\.111\b/i.test(o.connectionSettings.driverUri || ''),
-    osNet: Boolean(o.oHandle.bOsNet),
+    osNet: Boolean(o.oHandle?.bOsNet),
     // Режим USB Штриха — через саму ККТ (в очереди её обращений).
     pMode: String(o.connectionSettings.model) === 'shtrih' ? () => o.pShtrihMode(false) : null,
   }));

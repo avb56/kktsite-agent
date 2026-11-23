@@ -791,6 +791,12 @@ export function oCreateCoreHandle() {
         if (oClear.ResultCode !== 0) throw { code: 500, description: `Драйвер Посцентра: ${oClear.ResultCodeDescription}` };
         return null;
       }
+      // Сокет поверх драйвера Посцентра закрыт (драйвер потерял ККТ): кадры
+      // никуда не идут, и kkt-core ждал бы ответа впустую — «ККТ не отвечает
+      // на порту», а ККТ не переподключалась (Win7, 23.11.2026). Это обрыв.
+      const fGone = () => oPort?.oSocket?.bClosed
+        && { code: N_CONNECTION_LOST, description: `Связь с ККТ потеряна: ${oPort.oSocket.sLastError || 'соединение закрыто'}` };
+      if (fGone()) throw fGone();
       try {
         const aResults = await oKKT.pTaskSender(oTask);
         return aResults?.[0] ?? null;
@@ -799,6 +805,7 @@ export function oCreateCoreHandle() {
         // serialport это ошибки записи/чтения вида «… (GetOverlappedResult):
         // File not found», а не обрыв чтения. Тоже обрыв: device.js откроет
         // ККТ заново, когда порт появится (21.11.2026, Win7).
+        if (fGone()) throw fGone();
         if (oPort?.oError || R_PORT_GONE.test(oError?.message || '')) throw { code: N_CONNECTION_LOST, description: oError.message };
         throw { code: typeof oError.code === 'number' ? oError.code : 500, description: oError.message };
       }

@@ -88,10 +88,13 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
   let aIn = [];
   let pChain = Promise.resolve();
   let bClosed = false;
+  let nPending = 0; // команд у драйвера без ответа
   const oSocket = {
     binaryType: 'arraybuffer', onmessage: null, onclose: null,
     set onopen(f) { f?.(); },
     get onopen() { return null; },
+    /** Закрыт (драйвер потерял ККТ) — кадры больше никуда не идут. */
+    get bClosed() { return bClosed; },
     async close() {
       if (bClosed) return;
       bClosed = true;
@@ -107,14 +110,17 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
   function fDrain() {
     while (aIn.length) {
       const b = aIn[0];
-      if (b === ENQ) { aIn.shift(); fReply([NAK]); continue; } // готовы принять команду
+      // ENQ: NAK — готовы принять команду; ACK — команда ещё у драйвера (долгая
+      // печать), ответ будет: иначе kkt-core решил бы, что ответ потерян.
+      if (b === ENQ) { aIn.shift(); fReply([nPending ? ACK : NAK]); continue; }
       if (b === ACK || b === NAK) { aIn.shift(); continue; } // подтверждение нашего ответа
       if (b !== STX) { aIn.shift(); continue; }
       if (aIn.length < 2 || aIn.length < aIn[1] + 3) return; // кадр ещё не весь
       const aFrameIn = aIn.splice(0, aIn[1] + 3);
       const aBody = aFrameIn.slice(2, -1);
       fReply([ACK]);
-      pChain = pChain.then(() => pExchange(aBody)).then((aAnswer) => aAnswer && fReply(aFrame(aAnswer)));
+      nPending += 1;
+      pChain = pChain.then(() => pExchange(aBody)).then((aAnswer) => { nPending -= 1; if (aAnswer) fReply(aFrame(aAnswer)); });
     }
   }
   const oState = { n2106: 0 }; // 2106 последней проверки кода — для ответа FF69h
@@ -153,6 +159,7 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
     }
     // Связи с ККТ у драйвера нет — для kkt-core это обрыв порта.
     oSocket.sLastError = oResult.ResultCodeDescription || 'драйвер Посцентра: нет связи с ККТ';
+    fLog(`Драйвер Посцентра: нет связи с ККТ — ${oSocket.sLastError}; переподключаю`);
     oSocket.close();
     return null;
   }
@@ -254,8 +261,13 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
  * драйвера»: tcp://192.168.137.111:7778?timeout=15000&protocol=v1,
  * serial://…). Возвращает { oDrv, pClose }.
  */
+// Закрытие прежнего контекста (Disconnect) ещё идёт — новый Connect ждёт его:
+// по сети USB ККТ держит одно соединение и второе не примет.
+let pLastClose = Promise.resolve();
+
 export async function pOpenDriver(sUri, nPassword = 30) {
   fRetryLoad();
+  await pLastClose;
   if (!oInfo.loaded) throw Object.assign(new Error(oInfo.error || 'Драйвер Посцентра (fr_drv_ng) не загружен — укажите его каталог в общих настройках'), { code: N_NO_CONNECTION });
   if (!sUri) throw Object.assign(new Error('Не задан адрес ККТ для драйвера Посцентра'), { code: N_NO_CONNECTION });
   const oDrv = new oWrapper.ShtrihClassic();
@@ -266,9 +278,12 @@ export async function pOpenDriver(sUri, nPassword = 30) {
   }
   return {
     oDrv,
-    async pClose() {
-      await pDrvCall(oDrv, 'Disconnect').catch(() => {});
-      oDrv.destroy();
+    pClose() {
+      pLastClose = pLastClose.then(async () => {
+        await pDrvCall(oDrv, 'Disconnect').catch(() => {});
+        oDrv.destroy();
+      });
+      return pLastClose;
     },
   };
 }
