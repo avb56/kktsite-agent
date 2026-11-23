@@ -118,6 +118,10 @@ jobs:
           # Готовые сборки COM-порта и USB грузятся в этом Node 12.
           cd ../..
           dist/node12/node.exe -e "require('@serialport/bindings-cpp').autoDetect(); require('usb'); console.log('serialport и usb — ок')"
+          # Раннер — Windows Server 2022: модуль с функциями Windows 8+ здесь
+          # грузится, а на Windows 7 — нет (0.2.10: «The specified procedure
+          # could not be found»). Проверяем таблицы импорта.
+          node scripts/check-win7-imports.mjs node_modules
 
       - name: архив
         env:
