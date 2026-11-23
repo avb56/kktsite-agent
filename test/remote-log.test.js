@@ -69,3 +69,17 @@ test('отладочный журнал выключается сам через
   assert.equal(oGetSettings().debugLogUntil, 0);
   assert.equal(bDebugOn(), false);
 });
+
+test('срок отладочного журнала — с сервера; включённый пересчитывается от начала', async () => {
+  const { oPutSettings, oGetSettings, pLoadDebugMin } = await import('../src/settings.js');
+  oPutSettings({ debugLog: true });
+  const { debugLogSince } = oGetSettings();
+  let sAsked = '';
+  await pLoadDebugMin({ sPolicyUrl: 'https://srv.test/api/policy/lease', fFetch: async (s) => { sAsked = s; return { status: 200, json: async () => ({ debugMin: 45 }) }; } });
+  assert.equal(sAsked, 'https://srv.test/api/log/config');
+  assert.equal(oGetSettings().debugLogUntil, debugLogSince + 45 * 60e3);
+  oPutSettings({ debugLog: false });
+  oPutSettings({ debugLog: true });
+  assert.ok(oGetSettings().debugLogUntil - oGetSettings().debugLogSince === 45 * 60e3, 'новое включение — тоже 45 минут');
+  oPutSettings({ debugLog: false });
+});

@@ -31,7 +31,7 @@ import { Registry } from './registry.js';
 import { oCreateAgentServer } from './server.js';
 import { pInstallCommand, pUninstallCommand } from './installer.js';
 import { pServiceCommand } from './service.js';
-import { oGetSettings } from './settings.js';
+import { oGetSettings, pLoadDebugMin } from './settings.js';
 import { fConfigureCore, oPolicyAccess } from './core.js';
 import { fConfigureRemoteLog, fRemoteLog } from './remote-log.js';
 import { fConfigureSocks } from './socks.js';
@@ -99,6 +99,10 @@ async function pServe() {
   fConfigureCore({ fLog, sVersion: S_VERSION, sPolicyUrl: oInstallLayout()?.sPolicyUrl });
   // Ключ и адрес — те же, что у сервера политик; ключ касса может передать позже.
   fConfigureRemoteLog({ sVersion: S_VERSION, fAccess: oPolicyAccess });
+  // Срок отладочного журнала — из админки (settings.js); раз в час — свежий.
+  const fDebugMin = () => pLoadDebugMin({ sPolicyUrl: oPolicyAccess().policyUrl });
+  fDebugMin();
+  setInterval(fDebugMin, 3600e3).unref();
   fConfigureSocks({ fLog });
   if (!bStopped) oGetSettings(); // срок хранения заданий, SOCKS, драйвер Посцентра — из settings.json
   const oRegistry = new Registry();

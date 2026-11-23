@@ -15,6 +15,7 @@ import { fSetVendorData } from './core.js';
 import { fSetSocksServer } from './socks.js';
 import { oLoadShtrihDriver } from './shtrih-drv.js';
 import { fSetDebug } from './debug.js';
+import { pHttpFetch } from './http-fetch.js';
 
 const S_FILE = 'settings.json';
 
@@ -49,10 +50,33 @@ const O_DEFAULTS = {
   // N_DEBUG_MS после включения, как отладка кассы (#debug, 20 минут) — забытая
   // галочка иначе писала бы и слала журнал сутками. Ставит агент, не PUT.
   debugLogUntil: 0,
+  debugLogSince: 0,
 };
 
-const N_DEBUG_MS = 20 * 60 * 1000;
+// Срок отладочного журнала задаёт админка (политики, «Отладочный журнал,
+// минут») — тот же, что у кассы; сервер отдаёт его по /api/log/config, адрес —
+// у сервера политик. Пока не спросили — 20 минут.
+let nDebugMin = 20;
+const nDebugMs = () => nDebugMin * 60 * 1000;
 let oDebugTimer = null;
+
+/** Спросить срок у сервера; включённый журнал — пересчитать от его начала. Не бросает. */
+export async function pLoadDebugMin({ sPolicyUrl, fFetch } = {}) {
+  try {
+    const sUrl = new URL('/api/log/config', sPolicyUrl).href;
+    const oRes = await (fFetch || (typeof globalThis.fetch === 'function' ? globalThis.fetch : pHttpFetch))(sUrl);
+    if (oRes.status !== 200) return;
+    const nMin = Number((await oRes.json())?.debugMin);
+    if (!Number.isInteger(nMin) || nMin <= 0 || nMin === nDebugMin) return;
+    nDebugMin = nMin;
+    const o = oGetSettings();
+    if (o.debugLog && o.debugLogSince) {
+      oSettings = { ...o, debugLogUntil: o.debugLogSince + nDebugMs() };
+      fWriteJson(S_FILE, oSettings);
+      fApply(oSettings);
+    }
+  } catch { /* нет сети — прежний срок */ }
+}
 
 let oSettings = null;
 
@@ -61,7 +85,7 @@ export function oGetSettings() {
     oSettings = { ...O_DEFAULTS, ...vReadJson(S_FILE, {}) };
     // Включённый до прошлой остановки журнал — пока срок не вышел; без срока
     // (настройки прежних версий) — выключен.
-    if (oSettings.debugLog && !(oSettings.debugLogUntil > Date.now())) oSettings = { ...oSettings, debugLog: false, debugLogUntil: 0 };
+    if (oSettings.debugLog && !(oSettings.debugLogUntil > Date.now())) oSettings = { ...oSettings, debugLog: false, debugLogUntil: 0, debugLogSince: 0 };
     fApply(oSettings);
   }
   return oSettings;
@@ -92,7 +116,7 @@ export function oPutSettings(oNew) {
   if (!oNew || typeof oNew !== 'object' || Array.isArray(oNew)) throw new AgentError(400, 'Ожидается объект настроек');
   const oNext = { ...oGetSettings() };
   for (const [sKey, vValue] of Object.entries(oNew)) {
-    if (!(sKey in O_DEFAULTS) || sKey === 'debugLogUntil') continue;
+    if (!(sKey in O_DEFAULTS) || sKey === 'debugLogUntil' || sKey === 'debugLogSince') continue;
     const bOk = sKey === 'deleteRequestsAfter' || sKey === 'cancelWaitingRequestsAfter'
       ? Number.isInteger(vValue) && vValue >= 0 && vValue <= 4294967295
       : typeof vValue === typeof O_DEFAULTS[sKey];
@@ -100,7 +124,11 @@ export function oPutSettings(oNew) {
     oNext[sKey] = vValue;
   }
   // Отладочный журнал: включение (и повторное «Сохранить» с галочкой) — срок заново.
-  if ('debugLog' in oNew) oNext.debugLogUntil = oNext.debugLog ? Date.now() + N_DEBUG_MS : 0;
+  // Срок — от сервера (pLoadDebugMin), пока не спросили — 20 минут.
+  if ('debugLog' in oNew) {
+    oNext.debugLogSince = oNext.debugLog ? Date.now() : 0;
+    oNext.debugLogUntil = oNext.debugLog ? oNext.debugLogSince + nDebugMs() : 0;
+  }
   fWriteJson(S_FILE, oNext);
   oSettings = oNext;
   fApply(oNext);
