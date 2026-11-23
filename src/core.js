@@ -30,6 +30,7 @@ import { vReadJson, fWriteJson } from './store.js';
 import { aListSerialPorts, oSerialPort } from './serial.js';
 
 import { pOpenDriver, oDriverSocket, pDrvCall } from './shtrih-drv.js';
+import { bDebugOn } from './debug.js';
 const require = createRequire(import.meta.url);
 const S_POLICY_FILE = 'policy.json';
 const S_STORE_FILE = 'policy-store.json';
@@ -109,7 +110,9 @@ function fApplyConfig() {
   oLib.configure({
     // Библиотека пишет много — в журнал агента только сеть ККТ и сбои.
     log: {
-      info: (s) => { if (/^Штрих (PPP|RNDIS)/.test(s)) fLog(s); },
+      // Отладочный журнал (debug.js) — всё; только текст: второй аргумент —
+      // задания с позициями и кодами маркировки.
+      info: (s) => { if (bDebugOn() || /^Штрих (PPP|RNDIS)/.test(s)) fLog(s); },
       warn: (s) => fLog(s),
       error: (s) => fLog(s),
     },

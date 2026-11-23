@@ -17,6 +17,7 @@
 // рассчитан на параллельные вызовы. Очередь и синхронные запросы (/operations)
 // выстраиваются в одну цепочку (pChain).
 
+import { bDebugOn } from './debug.js';
 import { oCreateHandle } from './driver.js';
 import { bCoreModel, oCreateCoreHandle } from './core.js';
 
@@ -465,6 +466,8 @@ export class Device {
     }
     if (this.bExpired(oRequest)) return this.fExpire(oRequest);
     oRequest.sState = 'inProgress';
+    const fDebug = (sText) => { if (bDebugOn()) this.fLog?.(`ККТ [${this.id}] [отладка]: ${sText}`); };
+    fDebug(`задание ${oRequest.sUuid} — начато, ждало ${Date.now() - oRequest.nAddedAt} мс`);
     for (let n = oRequest.nNext; n < oRequest.aTasks.length; n += 1) {
       const oTask = oRequest.aTasks[n];
       const bFiscal = S_FISCAL_TASKS.has(oTask?.type);
@@ -473,13 +476,16 @@ export class Device {
       try {
         // Номер последнего ФД до задачи: по нему после сбоя видно, закрылся ли документ.
         if (bFiscal) nFdBefore = await this.pFdNumber();
+        const nAt = Date.now();
         const vResult = await this.oHandle.pProcess(oTask);
+        fDebug(`${oTask?.type} — ${Date.now() - nAt} мс`);
         oRequest.aResults[n] = { error: O_ERR_OK, status: 'ready', result: vResult ?? null };
         if (oQueueOptions.bBlockOnPrintErrors && vResult?.warnings?.notPrinted) {
           return this.fBlock({ sReason: 'paperError', oRequest, nTask: n, nFdBefore: null, oError: null });
         }
       } catch (oError) {
         const oTaskErr = oTaskError(oError);
+        fDebug(`${oTask?.type} — ошибка ${oTaskErr.code} ${oTaskErr.description}`);
         const sReason = sBlockReason(oTaskErr.code);
         // Исход неизвестен, только если фискальная задача успела начаться
         // (номер ФД до неё прочитан) и оборвалась на связи, ФН или бумаге.

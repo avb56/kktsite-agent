@@ -42,6 +42,7 @@
 // — Web Requests этого заголовка не шлёт, а старые версии Chrome без него не
 // пускают страницу из интернета к локальному адресу.
 
+import { bDebugOn } from './debug.js';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { AgentError, Device } from './device.js';
@@ -515,6 +516,11 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
       return oRes.end();
     }
     const oUrl = new URL(oReq.url, 'http://agent');
+    // Отладочный журнал (debug.js): запрос к API и время ответа; страницу настроек — нет.
+    if (bDebugOn() && oUrl.pathname.startsWith('/api/')) {
+      const nAt = Date.now();
+      oRes.once('finish', () => fLog(`[отладка] ${oReq.method} ${oUrl.pathname}${oUrl.searchParams.get('deviceID') ? `?deviceID=${oUrl.searchParams.get('deviceID')}` : ''} → ${oRes.statusCode}, ${Date.now() - nAt} мс`));
+    }
     pRoute(oReq, oRes, oUrl).catch((oError) => {
       if (oError instanceof AgentError) return fSendError(oRes, oError.nHttp, oError.message);
       // kkt-core сообщает об ошибке задания объектом { code, description }, а не Error.

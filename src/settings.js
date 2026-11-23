@@ -4,7 +4,7 @@
 // Применяются deleteRequestsAfter (в минутах), blockQueueOnPrintErrors
 // (device.js, «Блокировка очереди») и cancelWaitingRequestsAfter — своя
 // настройка агента, у Web Requests её нет (device.js, «Срок ожидания»), и
-// vendorData, socksServer, shtrihDriverPath и shtrihDriverDebug — тоже свои (core.js, socks.js). Остальные поля принимаются и хранятся,
+// vendorData, socksServer, shtrihDriverPath и debugLog — тоже свои (core.js, socks.js). Остальные поля принимаются и хранятся,
 // чтобы настройки переносились между Web Requests и агентом как есть, но агент
 // по ним ещё ничего не делает: задания не проверяются при добавлении
 // (validateRequestsOnAdd), скрипты ДТО и доп. строки документа не подключены.
@@ -13,7 +13,8 @@ import { AgentError, oQueueOptions } from './device.js';
 import { vReadJson, fWriteJson } from './store.js';
 import { fSetVendorData } from './core.js';
 import { fSetSocksServer } from './socks.js';
-import { oLoadShtrihDriver, fSetDriverDebug } from './shtrih-drv.js';
+import { oLoadShtrihDriver } from './shtrih-drv.js';
+import { fSetDebug } from './debug.js';
 
 const S_FILE = 'settings.json';
 
@@ -41,9 +42,9 @@ const O_DEFAULTS = {
   // для ТС ПИоТ (shtrih-drv.js). Пусто — KKT_AGENT_SHTRIH_DRIVER, иначе каталог
   // node и системный путь. Загруженный драйвер сменится после перезапуска агента.
   shtrihDriverPath: '',
-  // Своя настройка агента: в журнал — каждый вызов драйвера Посцентра с временем
-  // (shtrih-drv.js); для разбора, где ККТ задумывается.
-  shtrihDriverDebug: false,
+  // Своя настройка агента: отладочный журнал (debug.js) — запросы, задания,
+  // kkt-core, драйвер Посцентра с временем; для разбора, где ККТ задумывается.
+  debugLog: false,
 };
 
 let oSettings = null;
@@ -63,7 +64,7 @@ function fApply(oNew) {
   fSetVendorData(oNew.vendorData);
   fSetSocksServer(oNew.socksServer, { vendorData: oNew.vendorData });
   oLoadShtrihDriver(oNew.shtrihDriverPath || process.env.KKT_AGENT_SHTRIH_DRIVER || '');
-  fSetDriverDebug(oNew.shtrihDriverDebug);
+  fSetDebug(oNew.debugLog);
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */

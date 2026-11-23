@@ -18,6 +18,7 @@
 
 import { createRequire } from 'node:module';
 
+import { bDebugOn } from './debug.js';
 import { aAtolDriverArchs, aShtrihDriverArchs, sArchMismatch } from './winreg.js';
 
 const require = createRequire(import.meta.url);
@@ -81,10 +82,6 @@ const aFrame = (aBody) => { const a = [aBody.length, ...aBody]; return [STX, ...
  * без байтов — собираем ответ «команда, код ошибки». Нет связи (ResultCode < 0)
  * — сокет закрывается: устройство переподключит ККТ.
  */
-// Отладка — в журнал каждый вызов драйвера с временем: галочка в общих
-// настройках (shtrihDriverDebug) или KKT_AGENT_DRV_DEBUG.
-let bDebug = Boolean(process.env.KKT_AGENT_DRV_DEBUG);
-export function fSetDriverDebug(b) { bDebug = Boolean(b) || Boolean(process.env.KKT_AGENT_DRV_DEBUG); }
 const R_NO_LINK = /связ|connect|порт|port|timeout|таймаут|not connected/i;
 
 export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
@@ -142,15 +139,15 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         }
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
-        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
+        if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
-        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebug ? ' ' + JSON.stringify(oResult) : ''}`);
+        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`);
       } else {
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
         aAnswer = aFromHex(oResult.TransferBytes);
         // Команда (без пароля) и ответ — код и длина: данные чека в журнал не нужны.
-        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ExchangeBytes ${sHex(aBody.slice(0, nCmdLen))}h → ${oResult.ResultCode}${aAnswer.length ? `, ответ ${aAnswer.length} байт` : ''}, ${Date.now() - nAt} мс`);
+        if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ExchangeBytes ${sHex(aBody.slice(0, nCmdLen))}h → ${oResult.ResultCode}${aAnswer.length ? `, ответ ${aAnswer.length} байт` : ''}, ${Date.now() - nAt} мс`);
       }
     } catch (oError) {
       oResult = { ResultCode: -1, ResultCodeDescription: oError.message };
@@ -280,7 +277,7 @@ export async function pOpenDriver(sUri, nPassword = 30) {
   const oDrv = new oWrapper.ShtrihClassic();
   const nAt = Date.now();
   const oConnect = await pDrvCall(oDrv, 'Connect', { Password: nPassword, ConnectionURI: sUri });
-  if (bDebug) console.log(`${new Date().toISOString()} Драйвер Посцентра [отладка]: Connect ${sUri} → ${oConnect.ResultCode} ${oConnect.ResultCodeDescription}, ${Date.now() - nAt} мс`);
+  if (bDebugOn()) console.log(`${new Date().toISOString()} Драйвер Посцентра [отладка]: Connect ${sUri} → ${oConnect.ResultCode} ${oConnect.ResultCodeDescription}, ${Date.now() - nAt} мс`);
   if (oConnect.ResultCode !== 0) {
     oDrv.destroy();
     throw Object.assign(new Error(`Драйвер Посцентра не подключился к ККТ (${sUri}): ${oConnect.ResultCodeDescription}`), { code: N_NO_CONNECTION });
