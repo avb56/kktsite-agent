@@ -15,7 +15,7 @@
 // Сбой отправки в журнал агента не пишется через fLog: запись о сбое снова
 // ушла бы в эту очередь.
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { bDebugOn } from './debug.js';
 import { vReadJson, fWriteJson } from './store.js';
@@ -41,6 +41,15 @@ export function sMaskText(s) {
   } catch {
     return '[текст скрыт: маскировка недоступна]';
   }
+}
+
+// UUID v4 из randomBytes: crypto.randomUUID в Node 12 (Windows 7) ещё нет.
+function randomUUID() {
+  const a = randomBytes(16);
+  a[6] = (a[6] & 0x0f) | 0x40;
+  a[8] = (a[8] & 0x3f) | 0x80;
+  const s = a.toString('hex');
+  return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
 let oState = null; // { aQueue, nDropped, sDid }
