@@ -11,11 +11,12 @@
 // отсутствие сети), не больше N_MAX записей: лишние старые вытесняются, а
 // сколько вытеснено, уходит на сервер (dropped). Отправка — пачками.
 // Персональные данные (почта, телефон, ИНН физлица и кассира в тексте) —
-// «[ПД]» до постановки в очередь (sMaskPdText).
+// «[ПД]» до постановки в очередь (sMaskText — функциями kkt-core).
 // Сбой отправки в журнал агента не пишется через fLog: запись о сбое снова
 // ушла бы в эту очередь.
 
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { bDebugOn } from './debug.js';
 import { vReadJson, fWriteJson } from './store.js';
 import { pHttpFetch } from './http-fetch.js';
@@ -29,19 +30,17 @@ const N_TXT_MAX = 500;
 
 // Персональные данные — из записей вон до отправки: в тексте ошибок бывают
 // ИНН кассира, почта и телефон покупателя (содержимое заданий агент не пишет).
-// Копия sMaskPdText из kktsite apps/web/lib/log-mask.mjs (там тесты);
-// сервер маскирует и сам.
-const S_PD = '[ПД]';
-const rEMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const rPHONE = /(?<![\d.])(?:\+7|8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}(?![\d.])/g;
-const rINN12 = /(?<![\d.:/-])\d{12}(?![\d.:/-])/g;
-const rINN_PERSON = /(ИНН\s+(?:кассира|покупателя|клиента)\D{0,5})\d+/gi;
-
-/** Персональные данные в тексте: почта, телефон, ИНН физлица. */
-export function sMaskPdText(s) {
-  if (typeof s !== "string") return s;
-  return s.replace(rEMAIL, (sMail, nAt, sAll) => (sAll[nAt - 1] === ":" || /\/\/[^\s]*$/.test(sAll.slice(0, nAt)) ? sMail : S_PD))
-    .replace(rINN_PERSON, `$1${S_PD}`).replace(rPHONE, S_PD).replace(rINN12, S_PD);
+// Маскировка — kkt-core (sMaskPdText, sMaskUrlPasswords); он грузится лениво,
+// как в core.js. Не загрузился — текст не отправляем: без маскировки нельзя.
+const require = createRequire(import.meta.url);
+let oMask = null;
+export function sMaskText(s) {
+  try {
+    oMask ??= require('kkt-core');
+    return oMask.sMaskPdText(oMask.sMaskUrlPasswords(s));
+  } catch {
+    return '[текст скрыт: маскировка недоступна]';
+  }
 }
 
 let oState = null; // { aQueue, nDropped, sDid }
@@ -88,7 +87,7 @@ export function fRemoteLog(sLvl, sText) {
   oLoad();
   oState.aQueue.push({
     ts: Date.now(), lvl: sLvl === 'warn' || sLvl === 'error' ? sLvl : 'info',
-    txt: sMaskPdText(String(sText)).slice(0, N_TXT_MAX), seq: ++nSeq, sid: sSid, did: oState.sDid, ver: `agent-${oOptions.sVersion || 'dev'}`,
+    txt: sMaskText(String(sText)).slice(0, N_TXT_MAX), seq: ++nSeq, sid: sSid, did: oState.sDid, ver: `agent-${oOptions.sVersion || 'dev'}`,
   });
   if (oState.aQueue.length > N_MAX) {
     oState.nDropped += oState.aQueue.length - N_MAX;
