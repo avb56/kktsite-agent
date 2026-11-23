@@ -137,13 +137,17 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
           if (oPreResult.ResultCode !== 0) fLog(`Драйвер Посцентра: ${oPre.sMethod} — ${oPreResult.ResultCode} ${oPreResult.ResultCodeDescription}`);
           else oPre.fDone?.();
         }
+        const nAt = Date.now();
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
-        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}`);
+        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
         fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${process.env.KKT_AGENT_DRV_DEBUG ? ' ' + JSON.stringify(oResult) : ''}`);
       } else {
+        const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
         aAnswer = aFromHex(oResult.TransferBytes);
+        // Команда (без пароля) и ответ — код и длина: данные чека в журнал не нужны.
+        if (bDebug) fLog(`Драйвер Посцентра [отладка]: ExchangeBytes ${sHex(aBody.slice(0, nCmdLen))}h → ${oResult.ResultCode}${aAnswer.length ? `, ответ ${aAnswer.length} байт` : ''}, ${Date.now() - nAt} мс`);
       }
     } catch (oError) {
       oResult = { ResultCode: -1, ResultCodeDescription: oError.message };
@@ -271,7 +275,9 @@ export async function pOpenDriver(sUri, nPassword = 30) {
   if (!oInfo.loaded) throw Object.assign(new Error(oInfo.error || 'Драйвер Посцентра (fr_drv_ng) не загружен — укажите его каталог в общих настройках'), { code: N_NO_CONNECTION });
   if (!sUri) throw Object.assign(new Error('Не задан адрес ККТ для драйвера Посцентра'), { code: N_NO_CONNECTION });
   const oDrv = new oWrapper.ShtrihClassic();
+  const nAt = Date.now();
   const oConnect = await pDrvCall(oDrv, 'Connect', { Password: nPassword, ConnectionURI: sUri });
+  if (bDebug) console.log(`${new Date().toISOString()} Драйвер Посцентра [отладка]: Connect ${sUri} → ${oConnect.ResultCode} ${oConnect.ResultCodeDescription}, ${Date.now() - nAt} мс`);
   if (oConnect.ResultCode !== 0) {
     oDrv.destroy();
     throw Object.assign(new Error(`Драйвер Посцентра не подключился к ККТ (${sUri}): ${oConnect.ResultCodeDescription}`), { code: N_NO_CONNECTION });
