@@ -45,13 +45,23 @@ const O_DEFAULTS = {
   // Своя настройка агента: отладочный журнал (debug.js) — запросы, задания,
   // kkt-core, драйвер Посцентра с временем; для разбора, где ККТ задумывается.
   debugLog: false,
+  // До какого времени (мс) включён отладочный журнал: выключается сам через
+  // N_DEBUG_MS после включения, как отладка кассы (#debug, 20 минут) — забытая
+  // галочка иначе писала бы и слала журнал сутками. Ставит агент, не PUT.
+  debugLogUntil: 0,
 };
+
+const N_DEBUG_MS = 20 * 60 * 1000;
+let oDebugTimer = null;
 
 let oSettings = null;
 
 export function oGetSettings() {
   if (!oSettings) {
     oSettings = { ...O_DEFAULTS, ...vReadJson(S_FILE, {}) };
+    // Включённый до прошлой остановки журнал — пока срок не вышел; без срока
+    // (настройки прежних версий) — выключен.
+    if (oSettings.debugLog && !(oSettings.debugLogUntil > Date.now())) oSettings = { ...oSettings, debugLog: false, debugLogUntil: 0 };
     fApply(oSettings);
   }
   return oSettings;
@@ -65,6 +75,16 @@ function fApply(oNew) {
   fSetSocksServer(oNew.socksServer, { vendorData: oNew.vendorData });
   oLoadShtrihDriver(oNew.shtrihDriverPath || process.env.KKT_AGENT_SHTRIH_DRIVER || '');
   fSetDebug(oNew.debugLog);
+  // Срок отладочного журнала: по нему выключаем сами и записываем это в настройки.
+  if (oDebugTimer) clearTimeout(oDebugTimer);
+  oDebugTimer = null;
+  if (oNew.debugLog) {
+    oDebugTimer = setTimeout(() => {
+      oDebugTimer = null;
+      try { oPutSettings({ debugLog: false }); } catch { fSetDebug(false); }
+    }, Math.max(0, oNew.debugLogUntil - Date.now()));
+    oDebugTimer.unref?.();
+  }
 }
 
 /** PUT /settings: меняются только переданные поля; ошибка — как у Web Requests. */
@@ -72,13 +92,15 @@ export function oPutSettings(oNew) {
   if (!oNew || typeof oNew !== 'object' || Array.isArray(oNew)) throw new AgentError(400, 'Ожидается объект настроек');
   const oNext = { ...oGetSettings() };
   for (const [sKey, vValue] of Object.entries(oNew)) {
-    if (!(sKey in O_DEFAULTS)) continue;
+    if (!(sKey in O_DEFAULTS) || sKey === 'debugLogUntil') continue;
     const bOk = sKey === 'deleteRequestsAfter' || sKey === 'cancelWaitingRequestsAfter'
       ? Number.isInteger(vValue) && vValue >= 0 && vValue <= 4294967295
       : typeof vValue === typeof O_DEFAULTS[sKey];
     if (!bOk) throw new AgentError(400, `Некорректное значение или тип поля '${sKey}' (${typeof vValue})`);
     oNext[sKey] = vValue;
   }
+  // Отладочный журнал: включение (и повторное «Сохранить» с галочкой) — срок заново.
+  if ('debugLog' in oNew) oNext.debugLogUntil = oNext.debugLog ? Date.now() + N_DEBUG_MS : 0;
   fWriteJson(S_FILE, oNext);
   oSettings = oNext;
   fApply(oNext);

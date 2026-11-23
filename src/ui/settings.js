@@ -1201,6 +1201,8 @@ async function pLoadSettings() {
   $('settings-form').elements.socksServer.checked = oSettings.socksServer === true;
   $('settings-form').elements.shtrihDriverPath.value = oSettings.shtrihDriverPath || '';
   $('settings-form').elements.debugLog.checked = oSettings.debugLog === true;
+  $('debug-log-state').textContent = oSettings.debugLog && oSettings.debugLogUntil
+    ? `Включён до ${new Date(oSettings.debugLogUntil).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}.` : '';
   await pLoadSocks();
 }
 
@@ -1243,6 +1245,7 @@ async function pSaveSettings(oEvent) {
       debugLog: oEl.debugLog.checked,
     });
     oNotify.success('Настройки сохранены');
+    pLoadSettings().catch(() => {}); // срок отладочного журнала — от сервера
     setTimeout(() => pLoadSocks(), 500);
     // Не загруженный драйвер агент пробует загрузить сразу; загруженный сменится после перезапуска.
     await pLoadServerInfo().catch(() => {});

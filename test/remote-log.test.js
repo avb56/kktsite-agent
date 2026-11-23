@@ -55,3 +55,17 @@ test('персональные данные — [ПД] до отправки', (
   assert.equal(sMaskText(sKeep), sKeep);
   assert.equal(sMaskText('http://u:p@pc:16732/api/v2/'), 'http://u:***@pc:16732/api/v2/');
 });
+
+test('отладочный журнал выключается сам через 20 минут; срок ставит агент', async () => {
+  const { oPutSettings, oGetSettings } = await import('../src/settings.js');
+  const { bDebugOn } = await import('../src/debug.js');
+  const nBefore = Date.now();
+  oPutSettings({ debugLog: true, debugLogUntil: 1 });
+  const o = oGetSettings();
+  assert.equal(o.debugLog, true);
+  assert.ok(o.debugLogUntil >= nBefore + 20 * 60e3 - 1000 && o.debugLogUntil <= Date.now() + 20 * 60e3, 'срок — 20 минут, не из запроса');
+  assert.equal(bDebugOn(), true);
+  oPutSettings({ debugLog: false });
+  assert.equal(oGetSettings().debugLogUntil, 0);
+  assert.equal(bDebugOn(), false);
+});
