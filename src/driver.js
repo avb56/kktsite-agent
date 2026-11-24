@@ -12,6 +12,7 @@
 import { createRequire } from 'node:module';
 import { statSync } from 'node:fs';
 import { aAtolDriverArchs, sArchMismatch } from './winreg.js';
+import { fSettle } from './shtrih-drv.js';
 
 const require = createRequire(import.meta.url);
 
@@ -121,7 +122,8 @@ export function oCreateHandle() {
     },
     pProcess(oTask) {
       return new Promise((fResolve, fReject) =>
-        oFptr.processJsonAsync(oTask, (oError, vResult) => (oError ? fReject(oError) : fResolve(vResult))));
+        // Через setImmediate — как ответ драйвера Посцентра (shtrih-drv.js, fSettle).
+        oFptr.processJsonAsync(oTask, fSettle(fResolve, fReject)));
     },
     fClose() {
       try { oFptr.close(); } catch { /* уже закрыт — не ошибка */ }

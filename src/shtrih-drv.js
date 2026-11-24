@@ -64,9 +64,19 @@ export const oShtrihDriverInfo = () => {
 const N_NO_CONNECTION = 2;
 const STX = 2, ENQ = 5, ACK = 6, NAK = 0x15;
 
+/**
+ * Ответ обёртки драйвера — дальше через setImmediate. node-atol-wrapper зовёт
+ * колбэк в обход MakeCallback (Nan::Call в HandleOKCallback), и Node после него
+ * не выполняет микрозадачи: продолжение await ждало до следующего события —
+ * запроса кассы или таймера. На Windows 7 (Node 12) так каждая команда ККТ
+ * стояла до 1 с, опрос — 2,9 с вместо 0,2 (стенд, 24.11.2026). setImmediate Node
+ * зовёт как положено, и после него микрозадачи выполняются сразу.
+ */
+export const fSettle = (fResolve, fReject) => (oError, vResult) => setImmediate(() => (oError ? fReject(oError) : fResolve(vResult)));
+
 /** Вызов метода драйвера промисом: { ResultCode, ResultCodeDescription, ...aOut }. */
 export function pDrvCall(oDrv, sMethod, oProps = {}, aOut = []) {
-  return new Promise((fResolve, fReject) => oDrv.call(sMethod, oProps, aOut, (oError, oResult) => (oError ? fReject(oError) : fResolve(oResult))));
+  return new Promise((fResolve, fReject) => oDrv.call(sMethod, oProps, aOut, fSettle(fResolve, fReject)));
 }
 
 const sHex = (a) => [...a].map((n) => n.toString(16).padStart(2, '0').toUpperCase()).join(' ');
