@@ -4,6 +4,8 @@
 // агента (core.js). Поэтому здесь только то, чем пользуется kkt-core: method,
 // headers, body (строка или байты) → { ok, status, statusText, headers.get,
 // text(), json() }. Переадресации — как у fetch (до 5, 303 — GET без тела).
+// Сбой сети — как у fetch: TypeError «fetch failed», причина в cause; по этому
+// тексту kkt-core пишет «Сервер не отвечает» (проверка kkt-core test/node12-env.cjs).
 
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -44,7 +46,7 @@ export function pHttpFetch(vUrl, { method = 'GET', headers = {}, body } = {}, nR
       });
     });
     oReq.on('timeout', () => oReq.destroy(new Error(`${oUrl.origin}: нет ответа ${N_TIMEOUT_MS / 1000} с`)));
-    oReq.on('error', fReject);
+    oReq.on('error', (oErr) => fReject(Object.assign(new TypeError('fetch failed'), { cause: oErr })));
     oReq.end(oBody ?? undefined);
   });
 }

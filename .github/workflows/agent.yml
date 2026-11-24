@@ -82,3 +82,51 @@ jobs:
             # $PROGRAMDATA в Git Bash пуст (переменная — ProgramData): читаем через node.
             Windows) node -e "const p = require('path').join(process.env.ProgramData, 'kktsite-agent'); for (const f of ['agent.log', 'run.cmd']) { try { console.log('== ' + f + '\n' + require('fs').readFileSync(require('path').join(p, f), 'utf8')); } catch (e) { console.log(e.message); } }" ;;
           esac
+
+  # Сборка для Windows 7 едет под Node 12: esbuild переписывает синтаксис, но не
+  # то, чего в Node 12 нет (AbortController, atob, Array#at…). 0.3.16 так уехал
+  # с /piot, падавшим на каждый запрос. Здесь — Linux, но код и Node те же:
+  #   1) тесты агента в среде Node 12 (test/node12-env.cjs) — новое коду src/ не видно;
+  #   2) архив --bundle-node12 с настоящим Node 12 — поднимается, отвечает, /piot
+  #      работает (scripts/ci-node12-check.mjs).
+  node12:
+    name: node12 (Windows 7)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Обёртка драйвера — под заголовки Node 12, как в выпуске для Windows 7.
+      - name: npm ci
+        env:
+          npm_config_target: 12.22.12
+          npm_config_runtime: node
+          npm_config_disturl: https://nodejs.org/dist
+        run: |
+          for n in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci не удался (попытка $n), повторяю"
+            sleep 10
+          done
+          exit 1
+
+      - name: тесты в среде Node 12
+        run: npm run test:node12
+
+      - name: Node 12
+        run: |
+          F=node-v12.22.12-linux-x64.tar.xz
+          mkdir -p dist12/node && cd dist12/node
+          curl -fsSLO "https://nodejs.org/dist/v12.22.12/$F"
+          curl -fsSL https://nodejs.org/dist/v12.22.12/SHASUMS256.txt | grep " $F\$" | sha256sum -c -
+          tar -xJf "$F"
+
+      - name: архив под Node 12
+        run: node scripts/pack.mjs --bundle-node12 --node-binary dist12/node/node-v12.22.12-linux-x64/bin/node --platform linux-x64 --out dist12
+
+      - name: агент под Node 12 — поднимается, отвечает, /piot
+        run: node scripts/ci-node12-check.mjs "dist12/stage/kktsite-agent-$(node -p "require('./package.json').version")-linux-x64"

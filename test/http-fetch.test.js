@@ -26,7 +26,8 @@ test('pHttpFetch: POST с телом, JSON-ответ, статус, переа�
     assert.equal(oBad.ok, false);
     assert.equal(oBad.status, 503);
     assert.equal(await oBad.text(), 'нет');
-    await assert.rejects(pHttpFetch('http://127.0.0.1:1/'), /ECONNREFUSED/);
+    // Сбой сети — как у fetch: по «fetch failed» kkt-core пишет «Сервер не отвечает».
+    await assert.rejects(pHttpFetch('http://127.0.0.1:1/'), (e) => e instanceof TypeError && e.message === 'fetch failed' && e.cause.code === 'ECONNREFUSED');
   } finally {
     oServer.close();
   }

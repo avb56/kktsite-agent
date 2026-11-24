@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node src/main.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:node12": "node --require ./test/node12-env.cjs --test"
   },
   "engines": {
     "node": ">=20"
