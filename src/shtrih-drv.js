@@ -149,7 +149,7 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         }
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
-        if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
+        if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, BarcodeHex: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
         fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`, 'warn');
       } else {
@@ -182,7 +182,10 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
 
 const nLe = (a) => a.reduce((n, b, i) => n + b * 2 ** (8 * i), 0);
 const aLe = (n, nLen) => Array.from({ length: nLen }, (_, i) => Math.floor(Number(n) / 2 ** (8 * i)) % 256);
-const sLatin = (a) => String.fromCharCode(...a);
+// Код маркировки — драйверу байтами (BarcodeHex, «30 31 … 1D …»): в текстовом
+// BarCode разделитель GS теряется, и ККТ отвечает D3h «ошибка формата GS1»
+// (блок табака 8005, Win7, 24.11.2026); так передаёт и руководство драйвера.
+const sHexBytes = (a) => a.map((n) => n.toString(16).toUpperCase().padStart(2, '0')).join(' ');
 /** CP866 → строка: кириллица и Ёё; прочее за пределами ASCII — «?». */
 const sCp866 = (a) => a.map((n) => (n < 0x80 ? String.fromCharCode(n)
   : n <= 0xAF ? String.fromCharCode(0x410 + n - 0x80)
@@ -238,7 +241,7 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
       const aTlv = a.slice(4 + nCode, 4 + nCode + nTlv);
       return {
         sMethod: 'FNCheckItemBarcode',
-        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarCode: sLatin(a.slice(4, 4 + nCode)), TLVData: Buffer.from(aTlv) },
+        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(a.slice(4, 4 + nCode)), TLVData: Buffer.from(aTlv) },
         // TLVData задаём всегда, пустым тоже: в нём остаётся ответ прошлой
         // проверки, и драйвер дописал бы его к FF61h (ККТ отвечает D3h).
         aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
@@ -255,7 +258,7 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
     // Принять / отвергнуть проверенный код; ответ — 2106 (результат проверки).
     case 0xFF69: return { sMethod: a[0] ? 'FNAcceptMarkingCode' : 'FNDeclineMarkingCode', oProps: oPwd, fAnswer: () => [oState.n2106 & 255] };
     // Код маркировки к позиции: длина, КМ.
-    case 0xFF67: return { sMethod: 'FNSendItemBarcode', oProps: { ...oPwd, BarCode: sLatin(a.slice(1, 1 + a[0])) } };
+    case 0xFF67: return { sMethod: 'FNSendItemBarcode', oProps: { ...oPwd, BarcodeHex: sHexBytes(a.slice(1, 1 + a[0])) } };
     // Закрытие чека: 16 оплат по 5 байт, округление, 6 налогов по 5 байт, СНО.
     case 0xFF45: {
       const oProps = { ...oPwd };

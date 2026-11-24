@@ -155,6 +155,19 @@ test('драйвер Посцентра: кассир 1021 — при смене
   assert.equal(oMethodFor(aInn, 2, oState).aPre, undefined, 'ИНН — только FNSendTLV');
 });
 
+test('код маркировки драйверу — байтами (BarcodeHex), разделитель GS не теряется', () => {
+  const aCode = [...Buffer.from('0104629308877044216-AbC12\x1d8005090000\x1d93dGVz', 'latin1')];
+  const aPwd = [30, 0, 0, 0];
+  const oCheck = oMethodFor([0xFF, 0x61, ...aPwd, 1, 0, aCode.length, 0, ...aCode], 2, {});
+  assert.equal(oCheck.sMethod, 'FNCheckItemBarcode');
+  assert.equal(oCheck.oProps.BarCode, undefined);
+  assert.match(oCheck.oProps.BarcodeHex, /^30 31 30 34 .* 1D 38 30 30 35 .* 1D 39 33 /);
+  assert.equal(oCheck.oProps.BarcodeHex.split(' ').length, aCode.length);
+  const oSend = oMethodFor([0xFF, 0x67, ...aPwd, aCode.length, ...aCode], 2, {});
+  assert.equal(oSend.sMethod, 'FNSendItemBarcode');
+  assert.equal(oSend.oProps.BarcodeHex, oCheck.oProps.BarcodeHex);
+});
+
 test('адрес драйвера Посцентра → занятый COM-порт', () => {
   assert.equal(sDriverUriCom('serial:///dev/ttyACM0?baudrate=115200'), '/dev/ttyACM0');
   assert.equal(sDriverUriCom('serial://ttyACM0?timeout=1'), '/dev/ttyACM0');
