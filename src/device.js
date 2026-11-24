@@ -179,6 +179,8 @@ export class Device {
       // Ошибка последнего подключения: у Web Requests такого поля нет, а
       // кассиру без него не понять, почему ККТ «не активна».
       lastError: this.sLastError,
+      // Идёт подключение (драйвер открывает ККТ) — страница агента рисует полосу.
+      isConnecting: Boolean(this.bOpening) && !this.oHandle,
     };
   }
 
@@ -213,13 +215,16 @@ export class Device {
     return this.pSerial(async () => {
       if (this.oHandle) return;
       let oHandle;
+      this.bOpening = true;
       try {
         oHandle = await this.pOpenHandle();
       } catch (oError) {
+        this.bOpening = false;
         this.sLastError = oTaskError(oError).description;
         this.fScheduleReconnect();
         throw new AgentError(409, `ККТ [${this.id}] не подключилась: ${this.sLastError}`);
       }
+      this.bOpening = false;
       this.oHandle = oHandle;
       this.bWantActive = true;
       this.sLastError = null;

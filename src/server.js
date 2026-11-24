@@ -205,7 +205,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
 
     if (sPath === '/api/v2/utils/mapping' && sMethod === 'GET') return fSend(oRes, 200, oMapping());
     if (sPath === '/api/v2/utils/deviceParametersStruct' && sMethod === 'GET') {
-      const { lastError, ...oStruct } = new Device({ id: '' }).oDescribe();
+      const { lastError, isConnecting, ...oStruct } = new Device({ id: '' }).oDescribe();
       return fSend(oRes, 200, { ...oStruct, name: '', hasLicense: false });
     }
 

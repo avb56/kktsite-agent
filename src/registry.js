@@ -16,7 +16,7 @@ export class Registry {
 
   fSave() {
     fWriteJson(S_FILE, [...this.mDevices.values()].map((oDevice) => {
-      const { lastError, isLock, hasLicense, ...oRest } = oDevice.oDescribe();
+      const { lastError, isLock, hasLicense, isConnecting, ...oRest } = oDevice.oDescribe();
       return { ...oRest, isActive: oDevice.bWantActive };
     }));
   }

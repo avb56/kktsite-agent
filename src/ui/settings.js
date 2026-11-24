@@ -12,6 +12,9 @@ let oMapping = null;
 let aDevices = [];
 const mChecks = new Map(); // id → результат «Проверить связь»: переживает перерисовку списка
 const sBusy = new Set(); // id ККТ, по которым идёт запрос: кнопки неактивны
+// id ККТ, которые сейчас подключаются (после добавления, «Подключить»): вместо
+// «Не подключена» — «Подключаю…» и полоса. Поиск ККТ и драйвер — до десятков секунд.
+const sConnecting = new Set();
 const mModes = new Map(); // id Штриха-М → режим USB ({ usb, ppp, socks }) или { sError }
 let aPorts = []; // COM-порты ПК с распознанными ККТ (agentPorts)
 // ККТ через kkt-core: Штрих-М и Вики; остальные (модели — числа) — Атол через ДТО.
@@ -354,7 +357,9 @@ function fRenderDevices() {
     q('.summary').textContent = sConnectionSummary(oDevice.connectionSettings);
     q('.dot').classList.add(oDevice.isActive ? 'on' : oDevice.lastError ? 'fail' : 'off');
 
-    let sState = oDevice.isActive ? 'Подключена' : 'Не подключена';
+    const bConnecting = (sConnecting.has(oDevice.id) || oDevice.isConnecting) && !oDevice.isActive;
+    q('.connect-progress').hidden = !bConnecting;
+    let sState = oDevice.isActive ? 'Подключена' : bConnecting ? 'Подключаю…' : 'Не подключена';
     if (oDevice.isActive && oDevice.oQueue) {
       sState += oDevice.oQueue.number ? `, заданий в очереди: ${oDevice.oQueue.number}` : ', очередь пуста';
     }
@@ -362,7 +367,7 @@ function fRenderDevices() {
     const sError = oDevice.isLock
       ? `Очередь остановлена: ${O_BLOCK_REASONS[oDevice.oQueue?.blockReason] || 'сбой ККТ'}.`
         + (oDevice.isActive ? ' Сервер проверяет ККТ каждые 3 секунды и продолжит сам.' : ' Подключите ККТ — сервер выяснит исход и продолжит.')
-      : !oDevice.isActive && oDevice.lastError;
+      : !oDevice.isActive && !bConnecting && oDevice.lastError;
     if (sError) {
       q('.error').hidden = false;
       q('.error').textContent = sError;
@@ -419,6 +424,7 @@ async function pDeviceAction(sAct, oDevice, oButton) {
 
   const sId = encodeURIComponent(oDevice.id);
   sBusy.add(oDevice.id);
+  if (sAct === 'toggle' && !oDevice.isActive) sConnecting.add(oDevice.id);
   fRenderDevices();
   try {
     if (sAct === 'toggle') {
@@ -437,6 +443,7 @@ async function pDeviceAction(sAct, oDevice, oButton) {
     else oNotify.error(oError.message);
   } finally {
     sBusy.delete(oDevice.id);
+    sConnecting.delete(oDevice.id);
     await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
   }
 }
@@ -990,12 +997,19 @@ async function pSaveDevice(oEvent) {
       $('device-dialog').close();
       if (oEl.activate.checked) {
         // Добавляют ККТ, чтобы на ней печатать: подключаем сразу. Не вышло —
-        // ККТ в списке остаётся, причина видна у неё.
+        // ККТ в списке остаётся, причина видна у неё. Пока подключается — в
+        // списке уже есть, с полосой.
+        sConnecting.add(oAdded.id);
+        sBusy.add(oAdded.id);
+        await pRefreshDevices().catch(() => {});
         try {
           await pApi('POST', `activateDevice?deviceID=${encodeURIComponent(oAdded.id)}`);
           oNotify.success(`ККТ «${oAdded.name}» добавлена и подключена`);
         } catch (oActivateError) {
           oNotify.warning(`ККТ добавлена, но не подключилась: ${oActivateError.message}`);
+        } finally {
+          sConnecting.delete(oAdded.id);
+          sBusy.delete(oAdded.id);
         }
       } else {
         oNotify.success(`ККТ «${oAdded.name}» добавлена`);

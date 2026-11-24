@@ -310,7 +310,7 @@ test('ККТ для кассы: setDefaultDevice и devices/default, как у W
 test('описание ККТ — поля Web Requests', async () => {
   const { oBody } = await pCall('GET', '/devices/1');
   assert.deepEqual(Object.keys(oBody).sort(),
-    ['connectionSettings', 'hasLicense', 'id', 'isActive', 'isDefault', 'isLock', 'lastError', 'name', 'otherSettings']);
+    ['connectionSettings', 'hasLicense', 'id', 'isActive', 'isConnecting', 'isDefault', 'isLock', 'lastError', 'name', 'otherSettings']);
   assert.equal(oBody.otherSettings.useGlobalScriptsSettings, true);
   const { oBody: oStruct } = await pCall('GET', '/utils/deviceParametersStruct');
   assert.equal(oStruct.id, '');
