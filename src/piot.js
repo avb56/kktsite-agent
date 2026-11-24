@@ -178,9 +178,10 @@ function fConnectTls(oUrl, fLog, fDone) {
 /**
  * Переслать запрос модулю. Возвращает { nStatus, sContentType, aBody,
  * oCertificate } или бросает PiotError (нет связи, сертификат сменился,
- * таймаут). oSignal — касса оборвала запрос.
+ * таймаут). fOnAbort(f) — получает f, обрывающую запрос (касса ушла): не
+ * AbortSignal — в Node 12 (Windows 7) нет ни его, ни опции signal.
  */
-export function pPiotForward({ sMethod, sPath, aBody, sContentType, sAccept, oSignal, nTimeoutMs = N_TIMEOUT_MS, fLog = () => {} }) {
+export function pPiotForward({ sMethod, sPath, aBody, sContentType, sAccept, fOnAbort, nTimeoutMs = N_TIMEOUT_MS, fLog = () => {} }) {
   const oUrl = new URL(sPiotTarget() + sPath);
   return new Promise((fResolve, fReject) => {
     let oCertificate = null;
@@ -203,7 +204,6 @@ export function pPiotForward({ sMethod, sPath, aBody, sContentType, sAccept, oSi
           });
         },
       } : {}),
-      signal: oSignal,
       timeout: nTimeoutMs,
     }, (oRes) => {
       const aChunks = [];
@@ -224,6 +224,7 @@ export function pPiotForward({ sMethod, sPath, aBody, sContentType, sAccept, oSi
       }));
       oRes.on('error', fReject);
     });
+    fOnAbort?.(() => oReq.destroy(Object.assign(new Error('Касса оборвала запрос'), { name: 'AbortError' })));
     oReq.on('timeout', () => oReq.destroy(new PiotError('Модуль проверки не ответил вовремя')));
     oReq.on('error', (oError) => {
       if (oError instanceof PiotError || oError.name === 'AbortError') return fReject(oError);

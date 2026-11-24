@@ -324,8 +324,9 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
     if (sPath === '/piot' || sPath.startsWith('/piot/')) {
       const aBody = sMethod === 'GET' || sMethod === 'HEAD' ? undefined : await pReadBody(oReq);
       // Касса бросила запрос (не дождалась) — не держать и запрос к модулю.
-      const oAbort = new AbortController();
-      oRes.on('close', () => { if (!oRes.writableFinished) oAbort.abort(); });
+      // Без AbortController: в Node 12 (сборка для Windows 7) его нет.
+      let fAbort = null, bGone = false;
+      oRes.on('close', () => { if (!oRes.writableFinished) { bGone = true; fAbort?.(); } });
       const nStart = Date.now();
       const sTail = oUrl.pathname.slice('/piot'.length) || '/';
       try {
@@ -335,7 +336,7 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
           aBody,
           sContentType: oReq.headers['content-type'],
           sAccept: oReq.headers.accept,
-          oSignal: oAbort.signal,
+          fOnAbort: (f) => { fAbort = f; if (bGone) f(); },
           fLog,
         });
         // Коды маркировки в журнал не пишем — только путь и итог.
