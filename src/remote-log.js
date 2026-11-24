@@ -117,7 +117,9 @@ export async function pFlush() {
   if (bSending || !oState.aQueue.length) return !oState.aQueue.length;
   const { license, policyUrl } = oOptions.fAccess() || {};
   const sUrl = sLogUrl(policyUrl);
-  if (!license || !sUrl) { fSave(); return false; } // ключа нет — ждём его (касса передаст)
+  // Ключа нет — ждём его (касса передаст) и проверяем раз в N_RETRY_MS: иначе
+  // очередь ушла бы только со следующей записью журнала, а без отладки их почти нет.
+  if (!license || !sUrl) { fSave(); fSchedule(N_RETRY_MS); return false; }
   bSending = true;
   try {
     while (oState.aQueue.length) {

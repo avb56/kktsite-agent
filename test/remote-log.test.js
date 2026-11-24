@@ -83,3 +83,25 @@ test('срок отладочного журнала — с сервера; вк
   assert.ok(oGetSettings().debugLogUntil - oGetSettings().debugLogSince === 45 * 60e3, 'новое включение — тоже 45 минут');
   oPutSettings({ debugLog: false });
 });
+
+test('ключа нет — очередь ждёт его и отправляется сама, когда ключ появился', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  fResetRemoteLog();
+  const aSent = [];
+  let sKey = '';
+  fConfigureRemoteLog({
+    sVersion: '9.9.9',
+    fAccess: () => ({ license: sKey, policyUrl: 'https://srv.test/api/policy/lease' }),
+    fFetch: async (sUrl, o) => { aSent.push(JSON.parse(o.body)); return { status: 201 }; },
+  });
+  fSetDebug(false);
+  fRemoteLog('warn', 'без ключа');
+  assert.equal(await pFlush(), false, 'ключа нет — ждём');
+  sKey = 'lic_testtesttest'; // касса передала ключ, новых записей нет
+  t.mock.timers.tick(60e3);
+  for (let i = 0; i < 5 && !aSent.length; i++) await new Promise((f) => setImmediate(f));
+  assert.deepEqual(aSent.flatMap((o) => o.entries.map((e) => e.txt)), ['без ключа']);
+  // Отправка дописывает очередь после ответа — дождаться, потом сбросить.
+  for (let i = 0; i < 20 && !(await pFlush()); i++) await new Promise((f) => setImmediate(f));
+  fResetRemoteLog();
+});
