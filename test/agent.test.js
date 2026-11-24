@@ -159,10 +159,18 @@ test('код маркировки драйверу — байтами (BarcodeHe
   const aCode = [...Buffer.from('0104629308877044216-AbC12\x1d8005090000\x1d93dGVz', 'latin1')];
   const aPwd = [30, 0, 0, 0];
   const oCheck = oMethodFor([0xFF, 0x61, ...aPwd, 1, 0, aCode.length, 0, ...aCode], 2, {});
-  assert.equal(oCheck.sMethod, 'FNCheckItemBarcode');
+  // Штучно — FNCheckItemBarcode2: он не читает TLVData с остатками прошлых команд.
+  assert.equal(oCheck.sMethod, 'FNCheckItemBarcode2');
+  assert.deepEqual([oCheck.oProps.Quantity, oCheck.oProps.DivisionalQuantity, oCheck.oProps.TLVData], [1, false, undefined]);
+  assert.equal(oCheck.sDiag, `КМ ${aCode.length} байт, GS на 25, 36, TLV 0 байт`);
   assert.equal(oCheck.oProps.BarCode, undefined);
   assert.match(oCheck.oProps.BarcodeHex, /^30 31 30 34 .* 1D 38 30 30 35 .* 1D 39 33 /);
   assert.equal(oCheck.oProps.BarcodeHex.split(' ').length, aCode.length);
+  // С мерой и количеством (частичное выбытие) — FNCheckItemBarcode с TLVData.
+  const aTlv = [0x3C, 0x08, 0x01, 0x00, 0x00];
+  const oPart = oMethodFor([0xFF, 0x61, ...aPwd, 2, 0, aCode.length, aTlv.length, ...aCode, ...aTlv], 2, {});
+  assert.equal(oPart.sMethod, 'FNCheckItemBarcode');
+  assert.deepEqual([...oPart.oProps.TLVData], aTlv);
   const oSend = oMethodFor([0xFF, 0x67, ...aPwd, aCode.length, ...aCode], 2, {});
   assert.equal(oSend.sMethod, 'FNSendItemBarcode');
   assert.equal(oSend.oProps.BarcodeHex, oCheck.oProps.BarcodeHex);

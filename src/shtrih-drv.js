@@ -151,7 +151,7 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         oResult = await pDrvCall(oDrv, oMethod.sMethod, oMethod.oProps, oMethod.aOut ?? []);
         if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ${oMethod.sMethod} ${JSON.stringify({ ...oMethod.oProps, BarCode: undefined, BarcodeHex: undefined, TLVData: undefined })} → ${JSON.stringify({ ...oResult, TLVData: oResult.TLVData?.length })}, ${Date.now() - nAt} мс`);
         if (oResult.ResultCode === 0) return [...aBody.slice(0, nCmdLen), 0, ...(oMethod.fAnswer?.(oResult) ?? [])];
-        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`, 'warn');
+        fLog(`Драйвер Посцентра: ${oMethod.sMethod} — ${oResult.ResultCode} ${oResult.ResultCodeDescription}${oMethod.sDiag ? ` (${oMethod.sDiag})` : ''}${bDebugOn() ? ' ' + JSON.stringify(oResult) : ''}`, 'warn');
       } else {
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
@@ -191,6 +191,15 @@ const sCp866 = (a) => a.map((n) => (n < 0x80 ? String.fromCharCode(n)
   : n <= 0xAF ? String.fromCharCode(0x410 + n - 0x80)
     : n >= 0xE0 && n <= 0xEF ? String.fromCharCode(0x440 + n - 0xE0)
       : n === 0xF0 ? 'Ё' : n === 0xF1 ? 'ё' : '?')).join('');
+
+/** Ответ FF61h из свойств драйвера: 2004, причина, 2100, длина доп. данных, код ФН онлайн-проверки, 2106, TLV ОИСМ. */
+function fCheckAnswer(o, oState) {
+  const aHead = [o.CheckItemLocalResult & 255, o.CheckItemLocalError & 255, o.MarkingType2 & 255];
+  oState.n2106 = o.KMServerCheckingStatus >= 0 ? o.KMServerCheckingStatus : 0;
+  if (o.KMServerErrorCode < 0) return [...aHead, 0];
+  const aOism = o.KMServerErrorCode === 0 && o.TLVData ? [...o.TLVData] : [];
+  return [...aHead, 2 + aOism.length, o.KMServerErrorCode & 255, oState.n2106 & 255, ...aOism];
+}
 
 /**
  * Команды Штриха, которые должен видеть ТС ПИоТ, — методами драйвера: модуль
@@ -239,20 +248,32 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
     case 0xFF61: {
       const nCode = a[2], nTlv = a[3];
       const aTlv = a.slice(4 + nCode, 4 + nCode + nTlv);
+      const aCode = a.slice(4, 4 + nCode);
+      // Строение кода для журнала — без самого кода: длина и где разделители.
+      const aGs = aCode.reduce((aAcc, n, i) => (n === 0x1D ? [...aAcc, i] : aAcc), []);
+      const sDiag = `КМ ${nCode} байт, GS ${aGs.length ? 'на ' + aGs.join(', ') : 'нет'}, TLV ${nTlv} байт`;
+      // Штучно (без меры и количества) — FNCheckItemBarcode2: он TLVData не
+      // читает. FNCheckItemBarcode дописывает к FF61h всё, что осталось в
+      // TLVData (прошлый ответ, реквизиты FNSendTLV кассира), а пустой буфер
+      // драйвер для Windows, похоже, не очищает: ККТ отвечала D3h «ошибка
+      // формата GS1» на любой код (Win7, 24.11.2026).
+      if (!nTlv) {
+        return {
+          sMethod: 'FNCheckItemBarcode2',
+          sDiag,
+          oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(aCode), DivisionalQuantity: false, Quantity: 1, MeasureUnit: 0 },
+          aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
+          fAnswer: (o) => fCheckAnswer(o, oState),
+        };
+      }
       return {
         sMethod: 'FNCheckItemBarcode',
-        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(a.slice(4, 4 + nCode)), TLVData: Buffer.from(aTlv) },
-        // TLVData задаём всегда, пустым тоже: в нём остаётся ответ прошлой
-        // проверки, и драйвер дописал бы его к FF61h (ККТ отвечает D3h).
+        sDiag,
+        oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(aCode), TLVData: Buffer.from(aTlv) },
+        // TLVData задаём всегда: в нём остаётся ответ прошлой проверки, и
+        // драйвер дописал бы его к FF61h (ККТ отвечает D3h).
         aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
-        // Ответ FF61h: 2004, причина, 2100, длина доп. данных, код ФН онлайн-проверки, 2106, TLV ОИСМ.
-        fAnswer(o) {
-          const aHead = [o.CheckItemLocalResult & 255, o.CheckItemLocalError & 255, o.MarkingType2 & 255];
-          oState.n2106 = o.KMServerCheckingStatus >= 0 ? o.KMServerCheckingStatus : 0;
-          if (o.KMServerErrorCode < 0) return [...aHead, 0];
-          const aOism = o.KMServerErrorCode === 0 && o.TLVData ? [...o.TLVData] : [];
-          return [...aHead, 2 + aOism.length, o.KMServerErrorCode & 255, oState.n2106 & 255, ...aOism];
-        },
+        fAnswer: (o) => fCheckAnswer(o, oState),
       };
     }
     // Принять / отвергнуть проверенный код; ответ — 2106 (результат проверки).
