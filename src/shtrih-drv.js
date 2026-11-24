@@ -252,26 +252,12 @@ export function oMethodFor(aBody, nCmdLen, oState = {}) {
       // Строение кода для журнала — без самого кода: длина и где разделители.
       const aGs = aCode.reduce((aAcc, n, i) => (n === 0x1D ? [...aAcc, i] : aAcc), []);
       const sDiag = `КМ ${nCode} байт, GS ${aGs.length ? 'на ' + aGs.join(', ') : 'нет'}, TLV ${nTlv} байт`;
-      // Штучно (без меры и количества) — FNCheckItemBarcode2: он TLVData не
-      // читает. FNCheckItemBarcode дописывает к FF61h всё, что осталось в
-      // TLVData (прошлый ответ, реквизиты FNSendTLV кассира), а пустой буфер
-      // драйвер для Windows, похоже, не очищает: ККТ отвечала D3h «ошибка
-      // формата GS1» на любой код (Win7, 24.11.2026).
-      if (!nTlv) {
-        return {
-          sMethod: 'FNCheckItemBarcode2',
-          sDiag,
-          oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(aCode), DivisionalQuantity: false, Quantity: 1, MeasureUnit: 0 },
-          aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
-          fAnswer: (o) => fCheckAnswer(o, oState),
-        };
-      }
       return {
         sMethod: 'FNCheckItemBarcode',
         sDiag,
         oProps: { ...oPwd, ItemStatus: a[0], CheckItemMode: a[1], BarcodeHex: sHexBytes(aCode), TLVData: Buffer.from(aTlv) },
-        // TLVData задаём всегда: в нём остаётся ответ прошлой проверки, и
-        // драйвер дописал бы его к FF61h (ККТ отвечает D3h).
+        // TLVData задаём всегда, пустым тоже: в нём остаётся ответ прошлой
+        // проверки, и драйвер дописал бы его к FF61h (ККТ отвечает D3h).
         aOut: ['CheckItemLocalResult', 'CheckItemLocalError', 'MarkingType2', 'KMServerErrorCode', 'KMServerCheckingStatus', 'TLVData'],
         fAnswer: (o) => fCheckAnswer(o, oState),
       };
