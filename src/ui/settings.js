@@ -15,6 +15,8 @@ const sBusy = new Set(); // id ККТ, по которым идёт запрос
 // id ККТ, которые сейчас подключаются (после добавления, «Подключить»): вместо
 // «Не подключена» — «Подключаю…» и полоса. Поиск ККТ и драйвер — до десятков секунд.
 const sConnecting = new Set();
+const sChecking = new Set(); // идёт «Проверить связь» — та же полоса
+
 const mModes = new Map(); // id Штриха-М → режим USB ({ usb, ppp, socks }) или { sError }
 let aPorts = []; // COM-порты ПК с распознанными ККТ (agentPorts)
 // ККТ через kkt-core: Штрих-М и Вики; остальные (модели — числа) — Атол через ДТО.
@@ -358,11 +360,13 @@ function fRenderDevices() {
     q('.dot').classList.add(oDevice.isActive ? 'on' : oDevice.lastError ? 'fail' : 'off');
 
     const bConnecting = (sConnecting.has(oDevice.id) || oDevice.isConnecting) && !oDevice.isActive;
-    q('.connect-progress').hidden = !bConnecting;
+    const bChecking = sChecking.has(oDevice.id) && oDevice.isActive;
+    q('.connect-progress').hidden = !bConnecting && !bChecking;
     let sState = oDevice.isActive ? 'Подключена' : bConnecting ? 'Подключаю…' : 'Не подключена';
     if (oDevice.isActive && oDevice.oQueue) {
       sState += oDevice.oQueue.number ? `, заданий в очереди: ${oDevice.oQueue.number}` : ', очередь пуста';
     }
+    if (bChecking) sState += '. Проверяю связь…';
     q('.state').textContent = sState;
     const sError = oDevice.isLock
       ? `Очередь остановлена: ${O_BLOCK_REASONS[oDevice.oQueue?.blockReason] || 'сбой ККТ'}.`
@@ -425,6 +429,7 @@ async function pDeviceAction(sAct, oDevice, oButton) {
   const sId = encodeURIComponent(oDevice.id);
   sBusy.add(oDevice.id);
   if (sAct === 'toggle' && !oDevice.isActive) sConnecting.add(oDevice.id);
+  if (sAct === 'check') { sChecking.add(oDevice.id); mChecks.delete(oDevice.id); }
   fRenderDevices();
   try {
     if (sAct === 'toggle') {
@@ -444,6 +449,7 @@ async function pDeviceAction(sAct, oDevice, oButton) {
   } finally {
     sBusy.delete(oDevice.id);
     sConnecting.delete(oDevice.id);
+    sChecking.delete(oDevice.id);
     await pRefreshDevices().catch((oError) => oNotify.error(oError.message));
   }
 }
