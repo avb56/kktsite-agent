@@ -117,7 +117,8 @@ test('/piot/* — запрос и ответ модуля как есть, бе�
     assert.equal(aSeen[0].oHeaders['content-type'], 'application/json');
     assert.equal(aSeen[0].oHeaders.authorization, undefined, 'логин агента модулю не уходит');
     // Коды в журнал не попадают.
-    assert.ok(aLog.some((s) => s.startsWith('ПИоТ: POST /api/v3/codes/check → 200')));
+    // Коды в журнал не попадают; адрес модуля — да, без логина и пароля.
+    assert.ok(aLog.some((s) => /^ПИоТ: POST https:\/\/[^@\s]+\/api\/v3\/codes\/check → 200/.test(s)), aLog.join('\n'));
     assert.ok(!aLog.some((s) => s.includes('MDEw')));
   } finally {
     fDeleteUser('kassa');

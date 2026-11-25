@@ -52,7 +52,19 @@ import { oMapping } from './mapping.js';
 import { oPolicyAccess, oPutPolicyAccess, pPortList, pFindKkt, pShtrihSwitch, pShtrihSetSocks } from './core.js';
 import { oSocksStatus } from './socks.js';
 import { oGetSettings, oPutSettings } from './settings.js';
-import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError } from './piot.js';
+import { oPiotStatus, oPutPiot, oTrustPiot, pPiotCheck, pPiotForward, PiotError, sPiotTarget } from './piot.js';
+
+/** Адрес модуля ПИоТ для журнала: какой модуль ответил (тест 25.11.2026) — без логина и пароля. */
+function sPiotLogTarget() {
+  try {
+    const oUrl = new URL(sPiotTarget());
+    oUrl.username = '';
+    oUrl.password = '';
+    return oUrl.href.replace(/\/+$/, '');
+  } catch {
+    return '?';
+  }
+}
 import { aUserNames, bCheckBasic, fAddUser, fDeleteUser } from './users.js';
 
 const N_MAX_BODY = 1024 * 1024;
@@ -339,14 +351,14 @@ export function oCreateAgentServer({ oRegistry, sVersion, fLog = () => {}, oHttp
           fOnAbort: (f) => { fAbort = f; if (bGone) f(); },
           fLog,
         });
-        // Коды маркировки в журнал не пишем — только путь и итог.
-        fLog(`ПИоТ: ${sMethod} ${sTail} → ${oAnswer.nStatus} (${Date.now() - nStart} мс)`);
+        // Коды маркировки в журнал не пишем — только адрес модуля, путь и итог.
+        fLog(`ПИоТ: ${sMethod} ${sPiotLogTarget()}${sTail} → ${oAnswer.nStatus} (${Date.now() - nStart} мс)`);
         oRes.writeHead(oAnswer.nStatus, oAnswer.sContentType ? { 'Content-Type': oAnswer.sContentType } : {});
         return oRes.end(oAnswer.aBody);
       } catch (oError) {
         if (oError.name === 'AbortError') return undefined;
         if (!(oError instanceof PiotError)) throw oError;
-        fLog(`ПИоТ: ${sMethod} ${sTail} — ${oError.message}`, 'warn');
+        fLog(`ПИоТ: ${sMethod} ${sPiotLogTarget()}${sTail} — ${oError.message}`, 'warn');
         return fSendError(oRes, 502, oError.message);
       }
     }
