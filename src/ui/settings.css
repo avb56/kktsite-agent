@@ -96,6 +96,18 @@ dl.cert dd { margin: 0; overflow-wrap: anywhere; }
 details ul { padding-left: 20px; }
 details li { margin: 6px 0; }
 button:disabled { opacity: .55; cursor: default; }
+
+/* Индикатор занятости (settings.js, fBusy и fButtonBusy): полоса вверху страницы
+   и кружок на нажатой кнопке. */
+#busy-bar { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 1000; overflow: hidden; }
+#busy-bar[hidden] { display: none; }
+#busy-bar::before { content: ''; position: absolute; top: 0; bottom: 0; width: 40%; background: var(--accent); animation: busy-bar 1.2s ease-in-out infinite; }
+@keyframes busy-bar { from { left: -40%; } to { left: 100%; } }
+button.busy::after {
+  content: ''; display: inline-block; width: .8em; height: .8em; margin-left: 8px; vertical-align: -.1em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: busy-spin .8s linear infinite;
+}
+@keyframes busy-spin { to { transform: rotate(360deg); } }
 button.danger, button.danger-text { background: var(--err); border-color: var(--err); color: var(--err-text); }
 
 .devices { list-style: none; margin: 0; padding: 0; }

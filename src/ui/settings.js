@@ -42,7 +42,44 @@ const S_DRIVER_URI_NET = 'tcp://192.168.137.111:7778?timeout=15000&protocol=v1';
 const sDriverUriCom = (sCom) => `serial://${sCom}?baudrate=115200&timeout=15000&protocol=v1`;
 let oServerInfo = {}; // serverInfo: состояние драйверов
 
+// ——— индикатор занятости ———
+// Замечание теста 25.11.2026: на всех асинхронных действиях — индикатор.
+// Полоса вверху страницы — пока идёт любой запрос, меняющий что-то (не GET:
+// GET опрашивает список каждые несколько секунд, полоса мигала бы), и пока
+// сервер перезапускается; на нажатой кнопке — кружок (fButtonBusy).
+let nBusy = 0;
+let nBusyTimer = 0;
+function fBusy(bOn) {
+  nBusy = Math.max(0, nBusy + (bOn ? 1 : -1));
+  clearTimeout(nBusyTimer);
+  // Короткие ответы (до 200 мс) — без мигания.
+  if (nBusy) nBusyTimer = setTimeout(() => { $('busy-bar').hidden = !nBusy; }, 200);
+  else $('busy-bar').hidden = true;
+}
+/** Кнопка занята: недоступна и с кружком. */
+function fButtonBusy(oButton, bOn) {
+  if (!oButton) return;
+  oButton.disabled = bOn;
+  oButton.classList.toggle('busy', bOn);
+}
+
 async function pApi(sMethod, sPath, vBody) {
+  if (sMethod === 'GET') return pApiNow(sMethod, sPath, vBody);
+  // Кнопка, которой запустили действие (формы «Сохранить» и прочие), — с
+  // кружком на время запроса; уже занятую не трогаем — ею управляет сам обработчик.
+  const oEl = document.activeElement;
+  const oButton = oEl?.tagName === 'BUTTON' && !oEl.classList.contains('busy') ? oEl : null;
+  fBusy(true);
+  fButtonBusy(oButton, true);
+  try {
+    return await pApiNow(sMethod, sPath, vBody);
+  } finally {
+    fBusy(false);
+    fButtonBusy(oButton, false);
+  }
+}
+
+async function pApiNow(sMethod, sPath, vBody) {
   let oRes;
   try {
     oRes = await fetch(S_API + sPath, {
@@ -219,6 +256,8 @@ async function pLoadServerInfo() {
  * состояние: остановка ждёт очереди ККТ), и перечитать страницу.
  */
 function fReloadWhenBack(fReady = () => true) {
+  // Полоса — до перезагрузки страницы: сервер в это время не отвечает.
+  fBusy(true);
   setTimeout(function fWait() {
     pApi('GET', 'serverInfo').then((oInfo) => (fReady(oInfo) ? location.reload() : setTimeout(fWait, 2000)),
       () => setTimeout(fWait, 2000));
@@ -227,15 +266,22 @@ function fReloadWhenBack(fReady = () => true) {
 
 async function pRestart(oButton) {
   if (!await pConfirm('Перезапустить сервер? Он дождётся, пока очереди ККТ опустеют; несколько секунд касса не сможет печатать.', 'Перезапустить')) return;
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     await pApi('POST', 'agentRestart');
     oNotify.info('Сервер перезапускается — страница обновится сама');
+    fServiceState('Сервер перезапускается…');
     fReloadWhenBack();
   } catch (oError) {
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
     oNotify.error(oError.message);
   }
+}
+
+/** Что сейчас со службой — строка над кнопками «Доступа»; остальные кнопки панели недоступны. */
+function fServiceState(sText) {
+  $('service-state').textContent = sText;
+  for (const sId of ['restart-button', 'service-button']) $(sId).disabled = true;
 }
 
 /** Остановить или запустить службу (кнопка на «Доступе» и в предупреждении). */
@@ -243,13 +289,14 @@ async function pServiceAction(sAction, oButton) {
   if (sAction === 'stop' && !await pConfirm('Остановить службу агента? Она дождётся, пока очереди ККТ опустеют, '
     + 'и отпустит ККТ, порты и драйверы. Касса не сможет печатать, пока службу не запустят снова на этой странице '
     + '(или пока не перезагрузят ПК).', 'Остановить')) return;
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     await pApi('POST', 'agentService', { action: sAction });
     oNotify.info(sAction === 'stop' ? 'Служба останавливается — страница обновится сама' : 'Служба запускается — страница обновится сама');
+    fServiceState(sAction === 'stop' ? 'Служба останавливается: ждёт, пока очереди ККТ опустеют…' : 'Служба запускается…');
     fReloadWhenBack((oInfo) => Boolean(oInfo.stopped) === (sAction === 'stop'));
   } catch (oError) {
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
     oNotify.error(oError.message);
   }
 }
@@ -392,7 +439,12 @@ function fRenderDevices() {
       } else if (oMode.usb === 'rndis') {
         // Канал меняется в окне «Настроить» — здесь только что сейчас.
         // В ОФД и ОИСМ ККТ ходит через стек kkt-core и с SOCKS, и без него (стенд, 21.11.2026).
-        q('.mode').textContent = 'сеть USB (RNDIS), ОФД и ОИСМ — через этот компьютер';
+        // Через драйвер Посцентра агент говорит с ККТ драйвером, а не своим
+        // стеком, — так и пишем (замечание теста 25.11.2026).
+        const oConn = oDevice.connectionSettings;
+        q('.mode').textContent = oConn.port === 'driver'
+          ? `через драйвер Посцентра (${String(oConn.driverUri || 'адрес не задан').replace(/\?.*$/, '')}), ККТ — в сети USB (RNDIS); ОФД и ОИСМ — через этот компьютер`
+          : 'сеть USB (RNDIS), ОФД и ОИСМ — через этот компьютер';
       } else {
         q('.mode').textContent = bNet
           ? 'с ОФД и ОИСМ — через этот компьютер (USB PPP)'
@@ -713,7 +765,7 @@ function fSetFindState(sText) {
 async function pFindKkt() {
   if (bFinding) return;
   bFinding = true;
-  $('find-again').disabled = true;
+  fButtonBusy($('find-again'), true);
   fSetFindState('Ищу ККТ на портах и в сети USB…');
   fRenderChannels();
   try {
@@ -723,7 +775,7 @@ async function pFindKkt() {
     fSetFindState(`Поиск не удался: ${oError.message}`);
   } finally {
     bFinding = false;
-    $('find-again').disabled = false;
+    fButtonBusy($('find-again'), false);
   }
   $('com-list').replaceChildren(...(aPorts.length ? aPorts : oMapping.com).map((o) => new Option(o.description, o.key)));
   if (!$('device-dialog').open) return;
@@ -786,7 +838,7 @@ function aNetRows(oHere) {
 
 /** Включить SOCKS-сервер агента из окна ККТ (общая настройка socksServer) и обновить окно. */
 async function pEnableSocksServer(oButton) {
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     await pApi('PUT', 'settings', { socksServer: true });
     $('settings-form').elements.socksServer.checked = true;
@@ -800,7 +852,7 @@ async function pEnableSocksServer(oButton) {
     fRenderChannels();
   } catch (oError) {
     oNotify.error(`SOCKS-сервер не включён: ${oError.message}`);
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
   }
 }
 
@@ -982,7 +1034,7 @@ async function pSaveDevice(oEvent) {
     return;
   }
   oError.hidden = true;
-  $('device-save').disabled = true;
+  fButtonBusy($('device-save'), true);
   try {
     const oBody = { name: oEl.name.value.trim(), connectionSettings: oConnectionFromForm() };
     if (oEditing) {
@@ -1025,7 +1077,7 @@ async function pSaveDevice(oEvent) {
     oError.textContent = oSaveError.message;
     oError.hidden = false;
   } finally {
-    $('device-save').disabled = false;
+    fButtonBusy($('device-save'), false);
     await pRefreshDevices().catch((oRefreshError) => oNotify.error(oRefreshError.message));
   }
 }
@@ -1056,7 +1108,7 @@ async function pLoadUpdate() {
 }
 
 async function pUpdateAction(oBody, oButton) {
-  if (oButton) oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     const oStatus = await pApi('POST', 'agentUpdate', oBody);
     fRenderUpdate(oStatus);
@@ -1072,7 +1124,7 @@ async function pUpdateAction(oBody, oButton) {
     oNotify.error(oError.message);
     await pLoadUpdate().catch(() => {});
   } finally {
-    if (oButton) oButton.disabled = false;
+    fButtonBusy(oButton, false);
   }
 }
 
@@ -1108,7 +1160,7 @@ async function pLoadHttps() {
 }
 
 async function pHttpsAction(sAction, oButton) {
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     fRenderHttps(await pApi('POST', 'agentHttps', { action: sAction }));
     oNotify.success(sAction === 'disable' ? 'HTTPS выключен' : 'Сертификат выпущен, HTTPS включён');
@@ -1116,7 +1168,7 @@ async function pHttpsAction(sAction, oButton) {
     oNotify.error(oError.message);
     await pLoadHttps().catch(() => {});
   } finally {
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
   }
 }
 
@@ -1185,20 +1237,20 @@ async function pSavePiot(oEvent) {
 }
 
 async function pCheckPiot(oButton) {
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     fRenderPiotCheck(await pApi('POST', 'agentPiot', { action: 'check' }));
   } catch (oError) {
     oNotify.error(oError.message);
   } finally {
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
   }
 }
 
 async function pTrustPiot(oButton) {
   if (!await pConfirm('Доверять новому сертификату модуля? Подтверждайте, только если модуль переустанавливали '
     + 'или ему продлили сертификат: иначе коды маркировки могут уйти на чужой компьютер.', 'Доверять')) return;
-  oButton.disabled = true;
+  fButtonBusy(oButton, true);
   try {
     await pApi('POST', 'agentPiot', { action: 'trust', fingerprint: sPiotSeen });
     oNotify.success('Новый сертификат модуля запомнен');
@@ -1206,7 +1258,7 @@ async function pTrustPiot(oButton) {
   } catch (oError) {
     oNotify.error(oError.message);
   } finally {
-    oButton.disabled = false;
+    fButtonBusy(oButton, false);
   }
 }
 
