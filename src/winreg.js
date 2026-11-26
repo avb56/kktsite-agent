@@ -9,8 +9,8 @@
 // `reg query /reg:64` и `/reg:32` читают каждое представление явно.
 
 import { execFileSync } from 'node:child_process';
-import { closeSync, openSync, readSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const S_KEY = 'HKLM\\SOFTWARE\\ATOL\\Drivers\\10.0\\KKT';
 
@@ -87,6 +87,63 @@ export function aShtrihDriverArchs({ sPath = '', oEnv = process.env, fArch = sPe
     if (sArch && !aFound.includes(sArch)) aFound.push(sArch);
   }
   return aFound;
+}
+
+const bIsDir = (s) => { try { return statSync(s).isDirectory(); } catch { return false; } };
+
+/** classic_fr_drv_ng.dll в папке и ниже (архив драйвера: dist\win_…\x86_64\dynamic) — не глубже 6 уровней. */
+export function aFindShtrihDll(sDir, { nDepth = 6, fList = (s) => readdirSync(s, { withFileTypes: true }) } = {}) {
+  const aFound = [];
+  let nDirs = 0; // указали корень диска — не обходить его весь
+  const fWalk = (s, n) => {
+    if (++nDirs > 2000) return;
+    let aEntries = [];
+    try { aEntries = fList(s); } catch { return; }
+    for (const o of aEntries) {
+      if (o.isFile() && o.name.toLowerCase() === S_SHTRIH_DLL) aFound.push(join(s, o.name));
+      else if (o.isDirectory() && n > 0 && aFound.length < 20) fWalk(join(s, o.name), n - 1);
+    }
+  };
+  fWalk(sDir, nDepth);
+  return aFound;
+}
+
+// Библиотеки Microsoft Visual C++ 2015–2022, без которых не грузится сборка
+// драйвера Посцентра под MSVC (импорты classic_fr_drv_ng.dll 1.6, сверено
+// 26.11.2026); в архив драйвера они не входят.
+const A_VC_RUNTIME = ['msvcp140.dll', 'vcruntime140.dll'];
+
+/**
+ * Драйвер Посцентра не загрузился (на Windows — «Windows error 126»: нет
+ * модуля) — почему, словами: нет самого файла по указанному пути (и где он
+ * лежит глубже — в архиве драйвера), или файл есть, но нет Visual C++ нужной
+ * разрядности. '' — сказать нечего (путь не задан и файла нет — драйвер просто
+ * не ставили). Разрядность DLL проверяет sArchMismatch, до этого.
+ */
+export function sShtrihLoadHint({ sPath = '', sOwn = process.arch === 'ia32' ? 'ia32' : 'x64', oEnv = process.env,
+  fExists = existsSync, fDir = bIsDir, fFind = aFindShtrihDll, fArch = sPeArch } = {}) {
+  const sBits = sOwn === 'x64' ? '64' : '32';
+  const sArchDir = sOwn === 'x64' ? 'x86_64' : 'i386';
+  const sRoot = oEnv.SystemRoot || oEnv.windir || 'C:\\Windows';
+  let sFile = '';
+  if (sPath) {
+    sFile = /\.dll$/i.test(sPath) ? sPath : join(sPath, S_SHTRIH_DLL);
+    if (!fExists(sFile)) {
+      const sDir = fDir(sPath) ? sPath : '';
+      const aFound = sDir ? fFind(sDir).filter((s) => fArch(s) === sOwn) : [];
+      if (aFound.length) return `В «${sPath}» нет файла ${S_SHTRIH_DLL} — ${sBits}-разрядный лежит глубже. Укажите папку «${dirname(aFound[0])}»`;
+      return `По пути «${sPath}» нет файла ${S_SHTRIH_DLL}. Укажите папку, где лежит сам файл: в архиве драйвера — ${sArchDir}\\dynamic (агент ${sBits}-разрядный)`;
+    }
+  } else {
+    sFile = join(sRoot, 'System32', S_SHTRIH_DLL);
+    if (!fExists(sFile)) return '';
+  }
+  const aMissing = A_VC_RUNTIME.filter((s) => !fExists(join(dirname(sFile), s)) && !fExists(join(sRoot, 'System32', s)));
+  if (aMissing.length) {
+    return `Файл драйвера есть, но не установлен Microsoft Visual C++ 2015–2022 (${sBits}-разрядный): нет ${aMissing.join(', ')}. `
+      + `Поставьте vc_redist.${sOwn === 'x64' ? 'x64' : 'x86'}.exe с сайта Microsoft — агент подхватит драйвер сам в течение 30 с`;
+  }
+  return `Файл драйвера есть, но Windows не загрузила нужные ему библиотеки — распакуйте папку ${sArchDir}\\dynamic архива драйвера целиком`;
 }
 
 /**

@@ -19,7 +19,7 @@
 import { createRequire } from 'node:module';
 
 import { bDebugOn } from './debug.js';
-import { aAtolDriverArchs, aShtrihDriverArchs, sArchMismatch } from './winreg.js';
+import { aAtolDriverArchs, aShtrihDriverArchs, sArchMismatch, sShtrihLoadHint } from './winreg.js';
 
 const require = createRequire(import.meta.url);
 
@@ -41,10 +41,11 @@ export function oLoadShtrihDriver(sPath) {
     oInfo = { loaded: true, path: o.path, error: null };
   } catch (oError) {
     // Windows: драйвер Посцентра есть, но другой разрядности — сказать, что делать.
-    const sMismatch = process.platform === 'win32'
-      ? sArchMismatch('Посцентра', aShtrihDriverArchs({ sPath }), { aAtolArchs: aAtolDriverArchs() })
-      : '';
-    oInfo = { loaded: false, path: null, error: oError.message + (sMismatch ? `. ${sMismatch}` : ''), archError: sMismatch };
+    // Иначе — почему «Windows error 126»: нет файла по пути или нет Visual C++.
+    const bWin = process.platform === 'win32';
+    const sMismatch = bWin ? sArchMismatch('Посцентра', aShtrihDriverArchs({ sPath }), { aAtolArchs: aAtolDriverArchs() }) : '';
+    const sHint = sMismatch || (bWin ? sShtrihLoadHint({ sPath }) : '');
+    oInfo = { loaded: false, path: null, error: sHint ? `${sHint}. Подробности: ${oError.message}` : oError.message, archError: sHint };
   }
   return oInfo;
 }

@@ -174,3 +174,27 @@ test('разрядность DLL по заголовку PE, поиск драй
   assert.equal(bNotInstalled(`${sHead}  /x/libfptr10.so: /x/libfptr10.so: cannot open shared object file: No such file or directory\n  <system library path>: libfptr10.so: cannot open shared object file: No such file or directory`, 'linux'), true);
   assert.equal(bNotInstalled(`${sHead}  /x/libfptr10.so: libdep.so.1: cannot open shared object file: No such file or directory`, 'linux'), false, 'файл есть, нет зависимости — не «нет драйвера»');
 });
+
+// «Windows error 126» драйвера Посцентра — словами (стенд, Windows 10 x64, 26.11.2026).
+test('sShtrihLoadHint: нет файла по пути, файл глубже, нет Visual C++', async () => {
+  const { sShtrihLoadHint } = await import('../src/winreg.js');
+  const { join } = await import('node:path');
+  const oEnv = { SystemRoot: 'W' };
+  const sDeep = join('D', 'dist', 'win_1.6', 'x86_64', 'dynamic', 'classic_fr_drv_ng.dll');
+  const sDeep32 = join('D', 'dist', 'win_1.6', 'i386', 'dynamic', 'classic_fr_drv_ng.dll');
+  const oBase = { sOwn: 'x64', oEnv, fDir: s => s === 'D', fFind: () => [sDeep32, sDeep], fArch: s => (s.includes('x86_64') ? 'x64' : 'ia32') };
+  // Указан корень архива — подсказать 64-разрядную DLL глубже.
+  assert.match(sShtrihLoadHint({ ...oBase, sPath: 'D', fExists: () => false }), /глубже\. Укажите папку «D.dist.win_1\.6.x86_64.dynamic»/);
+  // Пути нет вовсе.
+  assert.match(sShtrihLoadHint({ ...oBase, sPath: 'X', fExists: () => false }), /По пути «X» нет файла classic_fr_drv_ng\.dll.*x86_64\\dynamic/);
+  // Файл есть, Visual C++ нет ни рядом, ни в System32.
+  const aHave = [join('E', 'classic_fr_drv_ng.dll')];
+  assert.match(sShtrihLoadHint({ ...oBase, sPath: 'E', fExists: s => aHave.includes(s) }), /Visual C\+\+ 2015–2022 \(64-разрядный\): нет msvcp140\.dll, vcruntime140\.dll\. Поставьте vc_redist\.x64\.exe/);
+  // Visual C++ в System32 — дело не в нём.
+  aHave.push(join('W', 'System32', 'msvcp140.dll'), join('W', 'System32', 'vcruntime140.dll'));
+  assert.match(sShtrihLoadHint({ ...oBase, sPath: 'E', fExists: s => aHave.includes(s) }), /распакуйте папку x86_64\\dynamic/);
+  // Путь не задан и драйвера в системе нет — не ставили, молчим.
+  assert.equal(sShtrihLoadHint({ ...oBase, sPath: '', fExists: () => false }), '');
+  // 32-разрядный агент — x86.
+  assert.match(sShtrihLoadHint({ ...oBase, sOwn: 'ia32', sPath: 'E', fExists: s => s === join('E', 'classic_fr_drv_ng.dll') }), /vc_redist\.x86\.exe/);
+});

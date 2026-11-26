@@ -347,6 +347,14 @@ curl -X POST http://127.0.0.1:16732/api/v2/devices -H 'Content-Type: application
   перезапуском. В `serverInfo` — `shtrihDriverPath` (что загружено) и
   `shtrihDriverError`.
 
+  Windows: каталог — тот, где лежит сам `classic_fr_drv_ng.dll` разрядности
+  агента (в архиве драйвера — `dist\win_<версия>\x86_64\dynamic` или
+  `i386\dynamic`), не корень архива. Сборке под MSVC нужен Microsoft Visual
+  C++ 2015–2022 той же разрядности (`vc_redist.x64.exe` / `vc_redist.x86.exe`):
+  в архив драйвера он не входит. Без файла или без Visual C++ Windows
+  отвечает «error 126» — агент пишет, что из двух (`sShtrihLoadHint`,
+  `src/winreg.js`), а если корень архива указан — где лежит DLL.
+
   Адрес ККТ — как у драйвера (`driverUri`): сеть USB через сеть ОС —
   `tcp://192.168.137.111:7778?timeout=15000&protocol=v1`, COM-порт —
   `serial://COM3?baudrate=115200&timeout=15000&protocol=v1` (Linux —
