@@ -47,3 +47,14 @@ test('ENQ, пока команда у драйвера, — ACK (ответ го
   await pTick();
   assert.deepEqual(aRx.splice(0), [0x15], 'ответ отдан — снова NAK');
 });
+
+test('ошибка ККТ: драйвер оставил в TransferBytes запрос — ответ «команда, код» из ResultCode, не пароль', async () => {
+  const oDrv = { call: (sMethod, oProps, aOut, f) => f(null, { ResultCode: 2, ResultCodeDescription: 'Неверное состояние ФН', TransferBytes: oProps.TransferBytes }) };
+  const oSocket = oDriverSocket(oDrv, 30);
+  const aRx = [];
+  oSocket.onmessage = (o) => aRx.push(...new Uint8Array(o.data));
+  // FF09h (итоги фискализации) с паролем 30 = 1Eh — у ФН без регистрации код 2.
+  oSocket.send(new Uint8Array(aFrame([0xFF, 0x09, 0x1E, 0, 0, 0])));
+  await new Promise((f) => setTimeout(f, 20));
+  assert.deepEqual(aRx, [6, ...aFrame([0xFF, 0x09, 0x02])]);
+});

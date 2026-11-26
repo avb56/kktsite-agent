@@ -157,6 +157,10 @@ export function oDriverSocket(oDrv, nPassword = 30, fLog = () => {}) {
         const nAt = Date.now();
         oResult = await pDrvCall(oDrv, 'ExchangeBytes', { Password: nPassword, BinaryConversion: 1, TransferBytes: sHex(aBody) }, ['TransferBytes']);
         aAnswer = aFromHex(oResult.TransferBytes);
+        // При ошибке ККТ драйвер оставляет в TransferBytes наш запрос (FF 09 1E
+        // 00 00 00 — с паролем 1Eh на месте кода): ответ ли это, видно по коду
+        // в нём. Иначе — ответ собираем из ResultCode ниже.
+        if (oResult.ResultCode !== 0 && aAnswer[nCmdLen] !== oResult.ResultCode) aAnswer = [];
         // Команда (без пароля) и ответ — код и длина: данные чека в журнал не нужны.
         if (bDebugOn()) fLog(`Драйвер Посцентра [отладка]: ExchangeBytes ${sHex(aBody.slice(0, nCmdLen))}h → ${oResult.ResultCode}${aAnswer.length ? `, ответ ${aAnswer.length} байт` : ''}, ${Date.now() - nAt} мс`);
       }
