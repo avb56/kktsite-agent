@@ -43,19 +43,9 @@ const sDriverUriCom = (sCom) => `serial://${sCom}?baudrate=115200&timeout=15000&
 let oServerInfo = {}; // serverInfo: состояние драйверов
 
 // ——— индикатор занятости ———
-// Замечание теста 25.11.2026: на всех асинхронных действиях — индикатор.
-// Полоса вверху страницы — пока идёт любой запрос, меняющий что-то (не GET:
-// GET опрашивает список каждые несколько секунд, полоса мигала бы), и пока
-// сервер перезапускается; на нажатой кнопке — кружок (fButtonBusy).
-let nBusy = 0;
-let nBusyTimer = 0;
-function fBusy(bOn) {
-  nBusy = Math.max(0, nBusy + (bOn ? 1 : -1));
-  clearTimeout(nBusyTimer);
-  // Короткие ответы (до 200 мс) — без мигания.
-  if (nBusy) nBusyTimer = setTimeout(() => { $('busy-bar').hidden = !nBusy; }, 200);
-  else $('busy-bar').hidden = true;
-}
+// Замечание теста 25.11.2026: на всех асинхронных действиях — индикатор: на
+// нажатой кнопке — кружок (fButtonBusy). Полосу вверху страницы убрали
+// 27.11.2026 (решение пользователя): кружков на кнопках достаточно.
 /** Кнопка занята: недоступна и с кружком. */
 function fButtonBusy(oButton, bOn) {
   if (!oButton) return;
@@ -69,12 +59,10 @@ async function pApi(sMethod, sPath, vBody) {
   // кружком на время запроса; уже занятую не трогаем — ею управляет сам обработчик.
   const oEl = document.activeElement;
   const oButton = oEl?.tagName === 'BUTTON' && !oEl.classList.contains('busy') ? oEl : null;
-  fBusy(true);
   fButtonBusy(oButton, true);
   try {
     return await pApiNow(sMethod, sPath, vBody);
   } finally {
-    fBusy(false);
     fButtonBusy(oButton, false);
   }
 }
@@ -256,8 +244,6 @@ async function pLoadServerInfo() {
  * состояние: остановка ждёт очереди ККТ), и перечитать страницу.
  */
 function fReloadWhenBack(fReady = () => true) {
-  // Полоса — до перезагрузки страницы: сервер в это время не отвечает.
-  fBusy(true);
   setTimeout(function fWait() {
     pApi('GET', 'serverInfo').then((oInfo) => (fReady(oInfo) ? location.reload() : setTimeout(fWait, 2000)),
       () => setTimeout(fWait, 2000));
@@ -1109,12 +1095,15 @@ async function pLoadUpdate() {
 
 async function pUpdateAction(oBody, oButton) {
   fButtonBusy(oButton, true);
+  // Агент перезапускается — кружок на кнопке до перезагрузки страницы.
+  let bRestarting = false;
   try {
     const oStatus = await pApi('POST', 'agentUpdate', oBody);
     fRenderUpdate(oStatus);
     if (oStatus.state === 'restarting') {
       oNotify.info('Обновлено, агент перезапускается — страница обновится сама');
       // Агент вернётся уже новой версией: ждём и перечитываем страницу.
+      bRestarting = true;
       fReloadWhenBack();
     } else if (oBody.action === 'check') {
       if (oStatus.available) oNotify.info(`Доступна версия ${oStatus.available.version}`);
@@ -1124,7 +1113,7 @@ async function pUpdateAction(oBody, oButton) {
     oNotify.error(oError.message);
     await pLoadUpdate().catch(() => {});
   } finally {
-    fButtonBusy(oButton, false);
+    if (!bRestarting) fButtonBusy(oButton, false);
   }
 }
 
