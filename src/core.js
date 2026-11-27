@@ -85,6 +85,20 @@ function pSendToOfd(sHostPort, aBytes) {
   });
 }
 
+/** Связь с сервером ОФД/ИСМ — только соединение, мс (kkt-core: pPingServer, pingIsm у Вики). */
+function pPingServer(sHostPort) {
+  return new Promise((fResolve, fReject) => {
+    const n = sHostPort.lastIndexOf(':');
+    const nStart = Date.now();
+    const oSocket = net.connect(Number(sHostPort.slice(n + 1)), sKktTargetHost(sHostPort.slice(0, n)), () => {
+      fResolve(Date.now() - nStart);
+      oSocket.destroy();
+    });
+    oSocket.setTimeout(5e3, () => { oSocket.destroy(); fReject(new Error(`${sHostPort} не соединился за 5 с`)); });
+    oSocket.on('error', fReject);
+  });
+}
+
 const pResolveHost = (sHost) => new Promise((fResolve, fReject) =>
   dns.lookup(sHost, { family: 4 }, (oError, sIp) => (oError ? fReject(oError) : fResolve(sIp))));
 
@@ -117,6 +131,7 @@ function fApplyConfig() {
       error: (s) => fLog(s, 'error'),
     },
     pSendToOfd,
+    pPingServer,
     pResolveHost,
     bVendorData,
     // Node 12 (Windows 7): своего fetch нет — сервер политик через http/https.
