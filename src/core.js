@@ -27,7 +27,7 @@ import { execFile } from 'node:child_process';
 import dns from 'node:dns';
 import { createRequire } from 'node:module';
 import { vReadJson, fWriteJson } from './store.js';
-import { aListSerialPorts, oSerialPort } from './serial.js';
+import { aListSerialPorts, oSerialPort, sPortBusy } from './serial.js';
 
 import { pOpenDriver, oDriverSocket, pDrvCall } from './shtrih-drv.js';
 import { bDebugOn } from './debug.js';
@@ -186,7 +186,9 @@ export async function pPortList() {
     const oKnown = O_KNOWN_PORTS[`${String(o.vendorId || '').toLowerCase()}:${String(o.productId || '').toLowerCase()}`];
     const sKey = process.platform === 'win32' && /^COM\d+$/i.test(o.path) ? o.path.slice(3) : o.path;
     const sMaker = [o.manufacturer, o.serialNumber].filter(Boolean).join(', ');
-    return { key: sKey, path: o.path, model: oKnown?.model || '', description: `${o.path} — ${oKnown?.description || sMaker || 'COM-порт'}` };
+    // Порт только из реестра (виртуальный: ComProxy и т. п.) — с именем устройства.
+    const sWhat = oKnown?.description || sMaker || (o.device ? `COM-порт (${o.device})` : 'COM-порт');
+    return { key: sKey, path: o.path, model: oKnown?.model || '', description: `${o.path} — ${sWhat}` };
   });
 }
 
@@ -555,6 +557,14 @@ export async function pFindKkt(aHeld = []) {
     if (oHeld) {
       Object.assign(oItem, { heldBy: oHeld.id, name: oHeld.name, channel: oHeld.channel || oItem.channel });
       if (oPort.model === 'shtrih') oItem.mode = await oHeld.pMode?.().catch(() => undefined);
+    } else if (oPort.model === 'viki') {
+      // Порт Вики, занятый другой программой (ComProxy держит физический порт
+      // и даёт кассе виртуальный), — не «найдена»: подключаться к нему нельзя
+      // (28.11.2026: агент предлагал занятый порт и подставлял его в форму).
+      const sBusy = await sPortBusy(oPort.path);
+      if (sBusy) oItem.error = sBusy === 'порт занят другой программой'
+        ? `${sBusy} (ComProxy?) — подключайте ККТ через порт, который даёт эта программа`
+        : sBusy;
     } else if (oPort.model === 'shtrih') {
       let oKkt = null;
       try {

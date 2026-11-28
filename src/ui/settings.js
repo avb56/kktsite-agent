@@ -606,7 +606,7 @@ function oChannelState(sVendor, sChannel) {
     const bOther = oHere.heldBy && oHere.heldBy !== oEditing?.id;
     oP.className = `channel-state ${oHere.error ? 'error' : 'found'}`;
     oP.textContent = oHere.error
-      ? `ККТ есть, но не ответила: ${oHere.error}`
+      ? (oHere.error.startsWith('порт занят') ? `ККТ есть, но ${oHere.error}` : `ККТ есть, но не ответила: ${oHere.error}`)
       : `Найдена: ${oHere.name || (oHere.model === 'atol' ? 'Атол по USB' : oHere.description.replace(/^\S+ — /, '').replace(/ — .*$/, ''))}`
         + (oHere.com && oHere.model !== 'atol' && sChannel !== 'rndis' ? ` (${oHere.com})` : '')
         + (bOther ? ` — уже добавлена как ККТ #${oHere.heldBy}` : '');
@@ -727,11 +727,16 @@ function fShowPortFields() {
   if (sPort === 'tcpip') sPort = 'tcp';
   for (const oItem of oForm.querySelectorAll('[data-vendor]')) oItem.hidden = oItem.dataset.vendor !== sVendor;
   for (const oLabel of oForm.querySelectorAll('[data-port]')) oLabel.hidden = oLabel.dataset.port !== sPort;
-  // COM-порт с ККТ — из найденной на канале, если свой не выбран.
+  // COM-порт с ККТ — из найденной на канале, если свой не вписан: поле пустое
+  // или в нём порт ККТ другой модели. Вписанный руками порт, которого нет в
+  // списке (виртуальный порт ComProxy), не трогаем — раньше его заменял порт
+  // найденной Вики, и сохранить свой номер было нельзя (28.11.2026). Занятый
+  // порт (error) не подставляем.
   if (sPort === 'com' && sVendor !== 'atol') {
     const oHere = oFoundOn(sVendor, sChannel);
-    const bKnown = aPorts.some((o) => o.key === oEl.com.value && o.model === sVendor);
-    if (oHere?.com && !bKnown) oEl.com.value = oHere.com;
+    const sCom = oEl.com.value.trim();
+    const bOtherModel = aPorts.some((o) => o.key === sCom && o.model && o.model !== sVendor);
+    if (oHere?.com && !oHere.error && (!sCom || bOtherModel)) oEl.com.value = oHere.com;
   }
   // Через драйвер: адреса — из найденных агентом; пустое поле — первый из них.
   if (sPort === 'driver') {

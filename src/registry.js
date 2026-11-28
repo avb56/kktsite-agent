@@ -109,7 +109,14 @@ export class Registry {
     while (Date.now() < nUntil) {
       if (bIdle()) {
         // И то, что уже в цепочке драйвера (синхронные /operations), — тоже.
-        await Promise.all([...this.mDevices.values()].map((o) => o.pSerial(() => {})));
+        // Подключение ККТ (bOpening) не ждём: документа в нём нет, а зависшее
+        // открытие порта держало остановку без конца (28.11.2026). И вообще —
+        // не дольше срока.
+        const aWait = [...this.mDevices.values()].filter((o) => !o.bOpening).map((o) => o.pSerial(() => {}));
+        let nTimer;
+        const bDone = await Promise.race([Promise.all(aWait).then(() => true),
+          new Promise((f) => { nTimer = setTimeout(() => f(false), Math.max(0, nUntil - Date.now())); })]).finally(() => clearTimeout(nTimer));
+        if (!bDone) return false;
         if (bIdle()) return true;
       }
       await new Promise((f) => setTimeout(f, 500));

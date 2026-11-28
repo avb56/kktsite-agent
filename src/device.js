@@ -22,7 +22,7 @@ import { oCreateHandle } from './driver.js';
 import { bCoreModel, oCreateCoreHandle } from './core.js';
 
 /** Общие настройки очередей; меняет settings.js по PUT /settings. */
-export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000, nWaitLimitSec: 120 };
+export const oQueueOptions = { nKeepMinutes: 43200, bBlockOnPrintErrors: true, nRecoverMs: 3000, nReconnectMs: 5000, nWaitLimitSec: 120, nOpenLimitMs: 180e3 };
 
 // ——— Блокировка очереди (как у Web Requests, спецификация 1.0.4.0) ———
 //
@@ -202,7 +202,18 @@ export class Device {
       // kkt-core сообщает об обрыве связи сам — тогда переподключаем, не
       // дожидаясь задания (драйвер Атола восстанавливает связь сам).
       if (bCore) oHandle.fOnLost = () => this.fScheduleRelink();
-      await oHandle.fOpen(bCore ? this.connectionSettings : oDriverSettings(this.connectionSettings));
+      // Подключение — не дольше nOpenLimitMs: зависшее открытие (виртуальный
+      // порт без второй стороны, 28.11.2026) держало цепочку ККТ, и с ней —
+      // отключение ККТ и остановку агента. Открылась позже — закрываем.
+      const pOpen = Promise.resolve(oHandle.fOpen(bCore ? this.connectionSettings : oDriverSettings(this.connectionSettings)));
+      let nTimer;
+      await Promise.race([pOpen, new Promise((_, fReject) => {
+        nTimer = setTimeout(() => {
+          pOpen.then(() => { try { oHandle.fClose(); } catch { /* уже закрыт */ } }, () => {});
+          fReject(Object.assign(new Error(`ККТ не подключилась за ${Math.round(oQueueOptions.nOpenLimitMs / 1000)} с — проверьте, что она включена и порт указан верно`), { code: 2 }));
+        }, oQueueOptions.nOpenLimitMs);
+        nTimer.unref?.();
+      })]).finally(() => clearTimeout(nTimer));
     } catch (oError) {
       try { oHandle.fClose(); } catch { /* не открылась — закрывать нечего */ }
       throw oError;
